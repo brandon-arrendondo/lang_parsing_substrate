@@ -1,0 +1,54 @@
+[package]
+name = "lang-parsing-substrate"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Brandon Arrendondo <brandon.arrendondo@bissell.com>"]
+description = "Shared language-parsing substrate for knots, funky, and tools_sqc"
+
+[dependencies]
+tree-sitter = "0.25"
+
+tree-sitter-ada                 = { version = "0.1",  optional = true }
+tree-sitter-c                   = { version = "0.24", optional = true }
+tree-sitter-cpp                 = { version = "0.23", optional = true }
+tree-sitter-rust                = { version = "0.24", optional = true }
+tree-sitter-python              = { version = "0.25", optional = true }
+tree-sitter-javascript          = { version = "0.25", optional = true }
+tree-sitter-typescript          = { version = "0.23", optional = true }
+tree-sitter-go                  = { version = "0.25", optional = true }
+tree-sitter-java                = { version = "0.23", optional = true }
+tree-sitter-c-sharp             = { version = "0.23", optional = true }
+tree-sitter-kotlin-ng           = { version = "1.1",  optional = true }
+tree-sitter-swift               = { version = "0.7",  optional = true }
+tree-sitter-php                 = { version = "0.24", optional = true }
+tree-sitter-fortran             = { version = "0.6",  optional = true }
+tree-sitter-fixed-form-fortran  = { path = "../tree-sitter-fixed-form-fortran-fork", optional = true }
+tree-sitter-scala               = { version = "0.26", optional = true }
+tree-sitter-lua                 = { version = "0.5",  optional = true }
+
+[features]
+lang-ada        = ["dep:tree-sitter-ada"]
+lang-c          = ["dep:tree-sitter-c"]
+lang-cpp        = ["dep:tree-sitter-cpp"]
+lang-rust       = ["dep:tree-sitter-rust"]
+lang-python     = ["dep:tree-sitter-python"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-typescript = ["dep:tree-sitter-typescript"]
+lang-go         = ["dep:tree-sitter-go"]
+lang-java       = ["dep:tree-sitter-java"]
+lang-csharp     = ["dep:tree-sitter-c-sharp"]
+lang-kotlin     = ["dep:tree-sitter-kotlin-ng"]
+lang-swift      = ["dep:tree-sitter-swift"]
+lang-php        = ["dep:tree-sitter-php"]
+lang-fortran    = ["dep:tree-sitter-fortran", "dep:tree-sitter-fixed-form-fortran"]
+lang-scala      = ["dep:tree-sitter-scala"]
+lang-lua        = ["dep:tree-sitter-lua"]
+
+all-languages = [
+    "lang-ada", "lang-c", "lang-cpp", "lang-rust", "lang-python",
+    "lang-javascript", "lang-typescript", "lang-go", "lang-java",
+    "lang-csharp", "lang-kotlin", "lang-swift", "lang-php",
+    "lang-fortran", "lang-scala", "lang-lua",
+]
+default = ["all-languages"]
