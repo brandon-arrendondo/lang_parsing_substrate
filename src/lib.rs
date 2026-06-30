@@ -1,5 +1,9 @@
+pub mod path_ignore;
+pub mod regions;
 pub mod registry;
 
+pub use path_ignore::PathIgnore;
+pub use regions::{ignored_regions, IgnoredRegion};
 pub use registry::{
     is_parseable_extension, is_source_extension, language_for_file, language_for_key,
     language_info_for_file, languages, sloc_mode_for_file, supported_languages_report,
