@@ -1,6 +1,28 @@
 # Migrating tools_sqc to lang-parsing-substrate
 
-**Status:** planned — not started.
+**Status:** IMPLEMENTED locally (uncommitted working tree); **benchmark validation pending.**
+Full local suite green: 3404 + 39 + 13 tests pass (was 3404 + 39 + 13 on the 0.22 baseline), zero new
+clippy warnings, binary smoke-tested (detects on `.c`/`.h`, rejects non-C). The tree-sitter
+`0.22 → 0.25` bump surfaced exactly **one** node-kind regression, now fixed (see below). The remaining
+gate is a benchmark run over real C codebases to catch subtler finding-count drift the fixtures don't
+cover.
+
+**What was actually done (smaller than the worst case below):**
+- The query/`StreamingIterator` break was **1 production file** (EXP42-C), not many.
+- The old `tree_sitter_c::language()` API appeared at **22 sites**; all now route through a single
+  `crate::parser::c_language()` helper that sources the grammar from the substrate. tools_sqc has **no
+  direct `tree-sitter-c` dep** anymore (added `lang-parsing-substrate` with `default-features=false,
+  features=["lang-c"]`, kept `tree-sitter = "0.25"` core, added `streaming-iterator`).
+- Detection centralized: `.c`/`.h` checks in `files/directory.rs` (×2) and `files/git.rs` now call
+  `lang_parsing_substrate::is_parseable_extension` (behavior-identical for C-only).
+- **Node-kind regression fixed — EXP33-C GNU asm.** The rule had reverse-engineered the *0.21* misparse
+  of `__asm("..":"=r"(v)..)` (output operand became `call_expression("=r",[v])`). 0.24 misparses it
+  entirely differently (operands collapse into an `ERROR`/`concatenated_string` that swallows the
+  following statement), causing a false-positive uninitialized read on the `__ASM` upper-case form.
+  Fixed by replacing the shape-specific match with a version-agnostic `is_in_asm_call()` check: any
+  identifier inside an asm-keyword (`asm`/`__asm`/`__asm__`, any case) `call_expression` is treated as
+  asm-opaque (never a genuine read). See `src/rules/cert_c/EXP/EXP33-C/exp33_c.rs`.
+
 **Effort:** large (several days), but **the cost is a tree-sitter version upgrade, not language detection.**
 The detection-centralization part is small; adopting the substrate forces tools_sqc off its pinned
 `tree-sitter 0.22` / `tree-sitter-c 0.21` onto the substrate's `0.25` / `tree-sitter-c 0.24`, and that
