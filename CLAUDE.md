@@ -57,8 +57,10 @@ are not yet implemented — see `todo.db` for open tasks.
 
 ## Fixed-form Fortran dependency note
 
-`Cargo.toml` pins fixed-form Fortran to a **git dep** on the
-`brandon-arrendondo/tree-sitter-fixed-form-fortran` fork (rev matches the one knots uses, so Cargo
-dedups the two). It was previously a `path = "../tree-sitter-fixed-form-fortran-fork"` dep, which broke
-the build on machines without that sibling checkout. This becomes a crates.io dep once
-`stadelmanma/tree-sitter-fixed-form-fortran` merges PR #4.
+Fixed-form Fortran (`.f`/`.for`/`.f77`) support was **dropped from `lang-fortran`** ahead of the
+v0.1.0 crates.io release — `cargo publish` rejects any manifest containing a `git` dependency,
+even on a fully optional feature, and `tree-sitter-fixed-form-fortran` only exists as a git dep on
+the `brandon-arrendondo/tree-sitter-fixed-form-fortran` fork. `lang-fortran` now covers only
+free-form Fortran (`tree-sitter-fortran`, a real crates.io dep). Re-add fixed-form once
+`stadelmanma/tree-sitter-fixed-form-fortran` merges PR #4 (real crates.io version) or the fork is
+itself published to crates.io.

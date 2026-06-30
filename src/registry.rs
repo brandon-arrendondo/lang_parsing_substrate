@@ -15,8 +15,6 @@ pub enum SlocMode {
     Lua,
     /// Strips `!` comment lines (free-form Fortran: `.f90`, `.f95`, …).
     Fortran,
-    /// Strips fixed-form comment lines: `*`/`C`/`c` at column 1, plus `!` anywhere.
-    FortranFixed,
 }
 
 /// A language the substrate can parse, with its display name, file extensions,
@@ -42,6 +40,9 @@ pub struct LanguageInfo {
 /// The returned slice reflects only the languages enabled via Cargo features
 /// at compile time. Iterate this to discover what the current binary supports
 /// rather than hard-coding extension lists in each tool.
+// vec![] can't express per-element #[cfg(...)] gates, so languages() below must
+// stay Vec::new() + push despite clippy::vec_init_then_push.
+#[allow(clippy::vec_init_then_push)]
 pub fn languages() -> &'static [LanguageInfo] {
     static LANGS: OnceLock<Vec<LanguageInfo>> = OnceLock::new();
     LANGS.get_or_init(|| {
@@ -170,7 +171,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             name: "Fortran",
             key: "fortran",
             extensions: &["f90", "f95", "f03", "f08", "F90", "F95", "F03", "F08"],
-            explicit_only: &["f", "for", "f77", "F", "FOR", "F77"],
+            explicit_only: &[],
             sloc_mode: SlocMode::Fortran,
         });
 
@@ -206,9 +207,7 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
         Some("adb" | "ada" | "ads") => Some(tree_sitter_ada::LANGUAGE.into()),
 
         #[cfg(feature = "lang-cpp")]
-        Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => {
-            Some(tree_sitter_cpp::LANGUAGE.into())
-        }
+        Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => Some(tree_sitter_cpp::LANGUAGE.into()),
 
         #[cfg(feature = "lang-rust")]
         Some("rs") => Some(tree_sitter_rust::LANGUAGE.into()),
@@ -248,11 +247,6 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
             Some(tree_sitter_fortran::LANGUAGE.into())
         }
 
-        #[cfg(feature = "lang-fortran")]
-        Some("f" | "for" | "f77" | "F" | "FOR" | "F77") => {
-            Some(tree_sitter_fixed_form_fortran::LANGUAGE.into())
-        }
-
         #[cfg(feature = "lang-scala")]
         Some("scala" | "sc") => Some(tree_sitter_scala::LANGUAGE.into()),
 
@@ -279,24 +273,12 @@ pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
         .find(|l| l.extensions.contains(&ext) || l.explicit_only.contains(&ext))
 }
 
-/// Returns the [`SlocMode`] for `path`, special-casing fixed-form Fortran
-/// (`.f`/`.for`/`.f77` and uppercase variants), which share the `"fortran"`
-/// [`LanguageInfo`] with free-form Fortran but require a distinct
-/// comment-stripping strategy ([`SlocMode::FortranFixed`]).
+/// Returns the [`SlocMode`] for `path`.
 ///
 /// Returns `None` if the extension is unknown or the corresponding language
 /// feature was not compiled in. Consumers that want a fallback should use
 /// `sloc_mode_for_file(path).unwrap_or(SlocMode::Default)`.
 pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
-    // Fixed-form Fortran shares the free-form "fortran" LanguageInfo (whose
-    // sloc_mode is the free-form `Fortran`), so it can't be read from the
-    // registry — special-case it here, but only when Fortran is compiled in.
-    #[cfg(feature = "lang-fortran")]
-    if let Some("f" | "for" | "f77" | "F" | "FOR" | "F77") =
-        path.extension().and_then(|e| e.to_str())
-    {
-        return Some(SlocMode::FortranFixed);
-    }
     language_info_for_file(path).map(|l| l.sloc_mode)
 }
 
@@ -304,11 +286,7 @@ pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
 /// compiled-in language.
 pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
     ext.to_str()
-        .map(|e| {
-            languages()
-                .iter()
-                .any(|l| l.extensions.contains(&e))
-        })
+        .map(|e| languages().iter().any(|l| l.extensions.contains(&e)))
         .unwrap_or(false)
 }
 
@@ -318,9 +296,9 @@ pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
 pub fn is_parseable_extension(ext: &std::ffi::OsStr) -> bool {
     ext.to_str()
         .map(|e| {
-            languages().iter().any(|l| {
-                l.extensions.contains(&e) || l.explicit_only.contains(&e)
-            })
+            languages()
+                .iter()
+                .any(|l| l.extensions.contains(&e) || l.explicit_only.contains(&e))
         })
         .unwrap_or(false)
 }
@@ -387,18 +365,9 @@ mod tests {
         assert!(language_for_file(Path::new("noext")).is_none());
     }
 
-    /// Fixed-form Fortran extensions must report `FortranFixed`, not the
-    /// free-form `Fortran` that the shared Fortran `LanguageInfo` carries.
     #[cfg(feature = "lang-fortran")]
     #[test]
-    fn fixed_form_fortran_sloc_mode() {
-        for ext in ["f", "for", "f77", "F", "FOR", "F77"] {
-            assert_eq!(
-                sloc_mode_for_file(Path::new(&format!("legacy.{ext}"))),
-                Some(SlocMode::FortranFixed),
-                ".{ext} should be fixed-form Fortran",
-            );
-        }
+    fn fortran_sloc_mode() {
         for ext in ["f90", "f95", "F90"] {
             assert_eq!(
                 sloc_mode_for_file(Path::new(&format!("modern.{ext}"))),
@@ -411,6 +380,111 @@ mod tests {
     #[cfg(feature = "lang-python")]
     #[test]
     fn python_sloc_mode() {
-        assert_eq!(sloc_mode_for_file(Path::new("a.py")), Some(SlocMode::Python));
+        assert_eq!(
+            sloc_mode_for_file(Path::new("a.py")),
+            Some(SlocMode::Python)
+        );
+    }
+
+    /// Every `LanguageInfo.key` must be lowercase ASCII and unique — consumers
+    /// use it as a config-section name (e.g. `[funky.cpp]`) and would silently
+    /// collide on duplicates or mismatched case.
+    #[test]
+    fn keys_are_lowercase_and_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for lang in languages() {
+            assert!(
+                lang.key.chars().all(|c| c.is_ascii_lowercase()),
+                "{} key {:?} is not lowercase ASCII",
+                lang.name,
+                lang.key
+            );
+            assert!(
+                seen.insert(lang.key),
+                "duplicate LanguageInfo.key {:?}",
+                lang.key
+            );
+        }
+    }
+
+    /// `language_info_for_file` must agree with `language_for_file` on every
+    /// registered extension — same set of extensions resolve in both, with no
+    /// grammar requirement.
+    #[test]
+    fn language_info_for_file_matches_extensions() {
+        for lang in languages() {
+            for ext in lang.extensions.iter().chain(lang.explicit_only) {
+                let info =
+                    language_info_for_file(Path::new(&format!("f.{ext}"))).unwrap_or_else(|| {
+                        panic!(".{ext} ({}) did not resolve to a LanguageInfo", lang.name)
+                    });
+                assert_eq!(
+                    info.key, lang.key,
+                    ".{ext} resolved to the wrong LanguageInfo"
+                );
+            }
+        }
+        assert!(language_info_for_file(Path::new("notes.txt")).is_none());
+        assert!(language_info_for_file(Path::new("noext")).is_none());
+    }
+
+    /// `is_source_extension` covers only recursive-discovery extensions;
+    /// `is_parseable_extension` additionally covers explicit-only ones
+    /// (headers, etc). An explicit-only extension must never be reported as a
+    /// source (discoverable) extension.
+    #[test]
+    fn source_vs_parseable_extension_distinction() {
+        for lang in languages() {
+            for ext in lang.extensions {
+                let os_ext = std::ffi::OsStr::new(ext);
+                assert!(
+                    is_source_extension(os_ext),
+                    ".{ext} ({}) should be a source extension",
+                    lang.name
+                );
+                assert!(
+                    is_parseable_extension(os_ext),
+                    ".{ext} ({}) should be parseable",
+                    lang.name
+                );
+            }
+            for ext in lang.explicit_only {
+                let os_ext = std::ffi::OsStr::new(ext);
+                assert!(
+                    !is_source_extension(os_ext),
+                    ".{ext} ({}) is explicit-only and must not be a source extension",
+                    lang.name
+                );
+                assert!(
+                    is_parseable_extension(os_ext),
+                    ".{ext} ({}) should still be parseable",
+                    lang.name
+                );
+            }
+        }
+        assert!(!is_source_extension(std::ffi::OsStr::new("txt")));
+        assert!(!is_parseable_extension(std::ffi::OsStr::new("txt")));
+    }
+
+    /// The report must mention every compiled-in language's name and every one
+    /// of its recursive-discovery extensions, with explicit-only extensions
+    /// called out separately.
+    #[test]
+    fn supported_languages_report_lists_every_language() {
+        let report = supported_languages_report();
+        for lang in languages() {
+            assert!(
+                report.contains(lang.name),
+                "report missing language {}",
+                lang.name
+            );
+            for ext in lang.extensions {
+                assert!(
+                    report.contains(&format!(".{ext}")),
+                    "report missing extension .{ext} for {}",
+                    lang.name
+                );
+            }
+        }
     }
 }

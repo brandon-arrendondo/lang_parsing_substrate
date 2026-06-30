@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT"
 authors = ["Brandon Arrendondo <brandon.arrendondo@bissell.com>"]
 description = "Shared language-parsing substrate for knots, funky, and tools_sqc"
+repository = "https://github.com/brandon-arrendondo/lang_parsing_substrate"
+readme = "README.md"
+keywords = ["tree-sitter", "parsing", "language-detection", "static-analysis"]
+categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
 tree-sitter = "0.25"
@@ -23,7 +27,6 @@ tree-sitter-kotlin-ng           = { version = "1.1",  optional = true }
 tree-sitter-swift               = { version = "0.7",  optional = true }
 tree-sitter-php                 = { version = "0.24", optional = true }
 tree-sitter-fortran             = { version = "0.6",  optional = true }
-tree-sitter-fixed-form-fortran  = { git = "https://github.com/brandon-arrendondo/tree-sitter-fixed-form-fortran", rev = "78e67d206c8f8bcc3485e734e235bc762aa92ccb", optional = true }
 tree-sitter-scala               = { version = "0.26", optional = true }
 tree-sitter-lua                 = { version = "0.5",  optional = true }
 
@@ -41,7 +44,7 @@ lang-csharp     = ["dep:tree-sitter-c-sharp"]
 lang-kotlin     = ["dep:tree-sitter-kotlin-ng"]
 lang-swift      = ["dep:tree-sitter-swift"]
 lang-php        = ["dep:tree-sitter-php"]
-lang-fortran    = ["dep:tree-sitter-fortran", "dep:tree-sitter-fixed-form-fortran"]
+lang-fortran    = ["dep:tree-sitter-fortran"]
 lang-scala      = ["dep:tree-sitter-scala"]
 lang-lua        = ["dep:tree-sitter-lua"]
 
