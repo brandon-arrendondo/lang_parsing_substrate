@@ -24,6 +24,10 @@ pub enum SlocMode {
 pub struct LanguageInfo {
     /// Human-facing name, e.g. "C++", "Ada".
     pub name: &'static str,
+    /// Canonical machine key — matches the Cargo feature suffix and config-file
+    /// section names (e.g. `[funky.cpp]`, `[knots.csharp.thresholds]`).
+    /// Always lowercase ASCII; e.g. `"cpp"`, `"csharp"`, `"javascript"`.
+    pub key: &'static str,
     /// Extensions used during recursive discovery (no leading dot).
     pub extensions: &'static [&'static str],
     /// Extensions parsed only when a file is passed explicitly — never
@@ -47,6 +51,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-c")]
         v.push(LanguageInfo {
             name: "C",
+            key: "c",
             extensions: &["c"],
             explicit_only: &["h"],
             sloc_mode: SlocMode::Default,
@@ -55,6 +60,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-cpp")]
         v.push(LanguageInfo {
             name: "C++",
+            key: "cpp",
             extensions: &["cpp", "cc", "cxx", "hpp", "hxx"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -63,6 +69,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-rust")]
         v.push(LanguageInfo {
             name: "Rust",
+            key: "rust",
             extensions: &["rs"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -71,6 +78,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-python")]
         v.push(LanguageInfo {
             name: "Python",
+            key: "python",
             extensions: &["py"],
             explicit_only: &[],
             sloc_mode: SlocMode::Python,
@@ -79,6 +87,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-javascript")]
         v.push(LanguageInfo {
             name: "JavaScript",
+            key: "javascript",
             extensions: &["js", "mjs", "cjs", "jsx"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -87,6 +96,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-typescript")]
         v.push(LanguageInfo {
             name: "TypeScript",
+            key: "typescript",
             extensions: &["ts", "tsx"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -95,6 +105,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-ada")]
         v.push(LanguageInfo {
             name: "Ada",
+            key: "ada",
             extensions: &["adb", "ada"],
             explicit_only: &["ads"],
             sloc_mode: SlocMode::Ada,
@@ -103,6 +114,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-go")]
         v.push(LanguageInfo {
             name: "Go",
+            key: "go",
             extensions: &["go"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -111,6 +123,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-java")]
         v.push(LanguageInfo {
             name: "Java",
+            key: "java",
             extensions: &["java"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -119,6 +132,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-csharp")]
         v.push(LanguageInfo {
             name: "C#",
+            key: "csharp",
             extensions: &["cs"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -127,6 +141,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-kotlin")]
         v.push(LanguageInfo {
             name: "Kotlin",
+            key: "kotlin",
             extensions: &["kt", "kts"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -135,6 +150,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-swift")]
         v.push(LanguageInfo {
             name: "Swift",
+            key: "swift",
             extensions: &["swift"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -143,6 +159,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-php")]
         v.push(LanguageInfo {
             name: "PHP",
+            key: "php",
             extensions: &["php"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -151,6 +168,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-fortran")]
         v.push(LanguageInfo {
             name: "Fortran",
+            key: "fortran",
             extensions: &["f90", "f95", "f03", "f08", "F90", "F95", "F03", "F08"],
             explicit_only: &["f", "for", "f77", "F", "FOR", "F77"],
             sloc_mode: SlocMode::Fortran,
@@ -159,6 +177,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-scala")]
         v.push(LanguageInfo {
             name: "Scala",
+            key: "scala",
             extensions: &["scala", "sc"],
             explicit_only: &[],
             sloc_mode: SlocMode::Default,
@@ -167,6 +186,7 @@ pub fn languages() -> &'static [LanguageInfo] {
         #[cfg(feature = "lang-lua")]
         v.push(LanguageInfo {
             name: "Lua",
+            key: "lua",
             extensions: &["lua"],
             explicit_only: &[],
             sloc_mode: SlocMode::Lua,
@@ -244,6 +264,19 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 
         _ => None,
     }
+}
+
+/// Returns the [`LanguageInfo`] for `path` based on its extension.
+///
+/// Unlike [`language_for_file`], this does not require a tree-sitter grammar —
+/// it is suitable for tools (e.g. formatters) that dispatch per-language
+/// without parsing. Returns `None` if the extension is unknown or the
+/// corresponding language feature was not compiled in.
+pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    languages()
+        .iter()
+        .find(|l| l.extensions.contains(&ext) || l.explicit_only.contains(&ext))
 }
 
 /// Returns `true` if `ext` is in the recursive-discovery set for any
