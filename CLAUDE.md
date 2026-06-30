@@ -9,7 +9,7 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 | Path | Purpose |
 |------|---------|
 | `src/lib.rs` | Crate root — module wiring, cfg-gated grammar re-exports (`pub use tree_sitter_*`) |
-| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `is_source_extension`, `is_parseable_extension`, `supported_languages_report()` |
+| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `supported_languages_report()` |
 | `Cargo.toml` | 16 optional `lang-*` features + `all-languages` + `default = ["all-languages"]` |
 | `tasks.py` | `invoke build / test / check / bump-version / publish / clean` |
 | `todo.db` | Task tracking — run `todo-sqlite-cli list` to see open work |
@@ -55,8 +55,10 @@ are not yet implemented — see `todo.db` for open tasks.
 - `../funky/` — formatting tool
 - `../tools_sqc/` — CERT-C compliance tool; has the rule engine that becomes Tier 4
 
-## Path dependency note
+## Fixed-form Fortran dependency note
 
-`Cargo.toml` currently uses `path = "../tree-sitter-fixed-form-fortran-fork"` for fixed-form Fortran.
-This will become a git dep once the fork is pushed to the enterprise remote, and eventually a
-crates.io dep when `stadelmanma/tree-sitter-fixed-form-fortran` merges PR #4.
+`Cargo.toml` pins fixed-form Fortran to a **git dep** on the
+`brandon-arrendondo/tree-sitter-fixed-form-fortran` fork (rev matches the one knots uses, so Cargo
+dedups the two). It was previously a `path = "../tree-sitter-fixed-form-fortran-fork"` dep, which broke
+the build on machines without that sibling checkout. This becomes a crates.io dep once
+`stadelmanma/tree-sitter-fixed-form-fortran` merges PR #4.

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use tree_sitter::Language;
 
 /// Which comment style a language uses (drives SLOC calculation).
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SlocMode {
     /// `//` and `/* */` — C, C++, Rust, JS, TS, Go, Java, …
     Default,
@@ -279,6 +279,27 @@ pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
         .find(|l| l.extensions.contains(&ext) || l.explicit_only.contains(&ext))
 }
 
+/// Returns the [`SlocMode`] for `path`, special-casing fixed-form Fortran
+/// (`.f`/`.for`/`.f77` and uppercase variants), which share the `"fortran"`
+/// [`LanguageInfo`] with free-form Fortran but require a distinct
+/// comment-stripping strategy ([`SlocMode::FortranFixed`]).
+///
+/// Returns `None` if the extension is unknown or the corresponding language
+/// feature was not compiled in. Consumers that want a fallback should use
+/// `sloc_mode_for_file(path).unwrap_or(SlocMode::Default)`.
+pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
+    // Fixed-form Fortran shares the free-form "fortran" LanguageInfo (whose
+    // sloc_mode is the free-form `Fortran`), so it can't be read from the
+    // registry — special-case it here, but only when Fortran is compiled in.
+    #[cfg(feature = "lang-fortran")]
+    if let Some("f" | "for" | "f77" | "F" | "FOR" | "F77") =
+        path.extension().and_then(|e| e.to_str())
+    {
+        return Some(SlocMode::FortranFixed);
+    }
+    language_info_for_file(path).map(|l| l.sloc_mode)
+}
+
 /// Returns `true` if `ext` is in the recursive-discovery set for any
 /// compiled-in language.
 pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
@@ -330,4 +351,66 @@ pub fn supported_languages_report() -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Every registered extension (recursive and explicit-only) must map to a
+    /// grammar via `language_for_file`, and only C extensions may map to the C
+    /// grammar. Guards against an extension silently failing to dispatch.
+    #[cfg(feature = "lang-c")]
+    #[test]
+    fn every_registered_extension_maps_to_its_grammar() {
+        let c_lang: Language = tree_sitter_c::LANGUAGE.into();
+        for lang in languages() {
+            for ext in lang.extensions.iter().chain(lang.explicit_only) {
+                let mapped = language_for_file(Path::new(&format!("f.{ext}")))
+                    .unwrap_or_else(|| panic!(".{ext} ({}) did not map to a grammar", lang.name));
+                if lang.key != "c" {
+                    assert_ne!(
+                        mapped, c_lang,
+                        ".{ext} ({}) fell through to the C grammar",
+                        lang.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_extension_has_no_language() {
+        assert!(language_for_file(Path::new("notes.txt")).is_none());
+        assert!(sloc_mode_for_file(Path::new("notes.txt")).is_none());
+        assert!(language_for_file(Path::new("noext")).is_none());
+    }
+
+    /// Fixed-form Fortran extensions must report `FortranFixed`, not the
+    /// free-form `Fortran` that the shared Fortran `LanguageInfo` carries.
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn fixed_form_fortran_sloc_mode() {
+        for ext in ["f", "for", "f77", "F", "FOR", "F77"] {
+            assert_eq!(
+                sloc_mode_for_file(Path::new(&format!("legacy.{ext}"))),
+                Some(SlocMode::FortranFixed),
+                ".{ext} should be fixed-form Fortran",
+            );
+        }
+        for ext in ["f90", "f95", "F90"] {
+            assert_eq!(
+                sloc_mode_for_file(Path::new(&format!("modern.{ext}"))),
+                Some(SlocMode::Fortran),
+                ".{ext} should be free-form Fortran",
+            );
+        }
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn python_sloc_mode() {
+        assert_eq!(sloc_mode_for_file(Path::new("a.py")), Some(SlocMode::Python));
+    }
 }
