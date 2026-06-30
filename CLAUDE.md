@@ -1,6 +1,6 @@
 # lang-parsing-substrate — developer guide for Claude
 
-Shared Rust **library crate** — the common parsing substrate for knots, funky, and tools_sqc.
+Shared Rust **library crate** — the common parsing substrate for knots, moldy, and tools_sqc.
 Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` registry across
 16 languages, compiled in at build time via Cargo feature flags.
 
@@ -33,7 +33,7 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 | Tool | Execution model | Cross-file features | Storage need |
 |------|----------------|--------------------|----|
 | knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
-| funky | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
+| moldy | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
 | tools_sqc | always full-scan | always ON | SQLite (path+mtime keyed) |
 
 Cross-file features (Tier 2: import graph, call graph; Tier 3: CFG; Tier 4: pattern matching)
@@ -52,7 +52,7 @@ are not yet implemented — see `todo.db` for open tasks.
 ## Related projects
 
 - `../knots/` — complexity metrics tool; CLAUDE.md there is the knots developer guide
-- `../funky/` — formatting tool
+- `../moldy/` — formatting tool
 - `../tools_sqc/` — CERT-C compliance tool; has the rule engine that becomes Tier 4
 
 ## Fixed-form Fortran dependency note

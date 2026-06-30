@@ -1,9 +1,10 @@
 # lang-parsing-substrate
 
 A shared language-parsing substrate for [knots](https://github.com/brandon-arrendondo/knots),
-funky, and tools_sqc. Provides tree-sitter grammar dispatch, language detection, and
-a unified `LanguageInfo` registry across 16 languages — compiled into each consumer
-at build time via Cargo feature flags.
+[moldy](https://github.com/brandon-arrendondo/moldy), and
+[tools_sqc](https://github.com/brandon-arrendondo/tools_sqc). Provides tree-sitter grammar
+dispatch, language detection, and a unified `LanguageInfo` registry across 16 languages —
+compiled into each consumer at build time via Cargo feature flags.
 
 ## Design
 
@@ -12,7 +13,7 @@ Each of the three tools is a *lens* on top of a common parsing layer:
 | Tool | Lens | Execution model |
 |------|------|----------------|
 | knots | complexity metrics (McCabe, Cognitive, AIRD, AICP, …) | fast; pre-commit or full scan |
-| funky | code formatting | fast; pre-commit or full scan |
+| moldy | code formatting | fast; pre-commit or full scan |
 | tools_sqc | CERT-C compliance + custom rules | batch; full scan |
 
 The substrate owns what all three share: language detection, grammar dispatch,
@@ -40,7 +41,7 @@ the full set.
 | `lang-swift` | Swift | `tree-sitter-swift` |
 | `lang-php` | PHP | `tree-sitter-php` |
 | `lang-ada` | Ada | `tree-sitter-ada` |
-| `lang-fortran` | Fortran (free + fixed-form) | `tree-sitter-fortran` + `tree-sitter-fixed-form-fortran` |
+| `lang-fortran` | Fortran (free-form) | `tree-sitter-fortran` |
 | `lang-scala` | Scala | `tree-sitter-scala` |
 | `lang-lua` | Lua | `tree-sitter-lua` |
 | `all-languages` | All of the above | — |
