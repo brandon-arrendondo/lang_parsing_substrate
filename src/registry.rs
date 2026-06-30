@@ -260,6 +260,72 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
     }
 }
 
+/// Returns the tree-sitter `Language` for the given canonical language key.
+///
+/// The key is the [`LanguageInfo::key`] value defined by this registry — e.g.
+/// `"c"`, `"cpp"`, `"rust"`. Returns `None` if the key is unknown or the
+/// corresponding language feature was not compiled in.
+///
+/// This is the complement to [`language_for_file`]: use it when you already
+/// have a key (from [`LanguageInfo::key`]) and want the grammar without
+/// constructing a fake file path.
+pub fn language_for_key(key: &str) -> Option<Language> {
+    match key {
+        #[cfg(feature = "lang-ada")]
+        "ada" => Some(tree_sitter_ada::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-c")]
+        "c" => Some(tree_sitter_c::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-cpp")]
+        "cpp" => Some(tree_sitter_cpp::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-csharp")]
+        "csharp" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-fortran")]
+        "fortran" => Some(tree_sitter_fortran::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-go")]
+        "go" => Some(tree_sitter_go::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-java")]
+        "java" => Some(tree_sitter_java::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-javascript")]
+        "javascript" => Some(tree_sitter_javascript::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-kotlin")]
+        "kotlin" => Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-lua")]
+        "lua" => Some(tree_sitter_lua::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-php")]
+        "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
+
+        #[cfg(feature = "lang-python")]
+        "python" => Some(tree_sitter_python::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-rust")]
+        "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-scala")]
+        "scala" => Some(tree_sitter_scala::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-swift")]
+        "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-typescript")]
+        "typescript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+
+        #[cfg(feature = "lang-typescript")]
+        "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+
+        _ => None,
+    }
+}
+
 /// Returns the [`LanguageInfo`] for `path` based on its extension.
 ///
 /// Unlike [`language_for_file`], this does not require a tree-sitter grammar —
@@ -464,6 +530,41 @@ mod tests {
         }
         assert!(!is_source_extension(std::ffi::OsStr::new("txt")));
         assert!(!is_parseable_extension(std::ffi::OsStr::new("txt")));
+    }
+
+    /// `language_for_key` must round-trip with `LanguageInfo.key` for every
+    /// compiled-in language: `language_for_key(info.key)` must return the same
+    /// `Language` as `language_for_file` on a file with one of that language's
+    /// registered extensions.
+    #[test]
+    fn language_for_key_round_trips_with_language_info() {
+        for lang in languages() {
+            let by_key = language_for_key(lang.key).unwrap_or_else(|| {
+                panic!(
+                    "language_for_key({:?}) returned None for compiled-in language {}",
+                    lang.key, lang.name
+                )
+            });
+            // Pick any registered extension to get the canonical Language via
+            // the file-based path and verify both routes agree.
+            let ext = lang.extensions.first().or_else(|| lang.explicit_only.first()).unwrap();
+            let by_file = language_for_file(Path::new(&format!("f.{ext}"))).unwrap_or_else(|| {
+                panic!(".{ext} ({}) did not resolve via language_for_file", lang.name)
+            });
+            assert_eq!(
+                by_key, by_file,
+                "language_for_key({:?}) disagrees with language_for_file for {}",
+                lang.key, lang.name
+            );
+        }
+    }
+
+    /// Keys not in the registry return None.
+    #[test]
+    fn language_for_key_unknown_returns_none() {
+        assert!(language_for_key("").is_none());
+        assert!(language_for_key("txt").is_none());
+        assert!(language_for_key("C").is_none()); // case-sensitive
     }
 
     /// The report must mention every compiled-in language's name and every one
