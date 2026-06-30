@@ -101,20 +101,3 @@ jobs:
             THIRD_PARTY_LICENSES.txt
             lang-parsing-substrate.cdx.json
           retention-days: 30
-
-  publish:
-    name: Publish to crates.io
-    needs: build
-    runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: crates-io
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish
-        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
