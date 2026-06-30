@@ -547,9 +547,16 @@ mod tests {
             });
             // Pick any registered extension to get the canonical Language via
             // the file-based path and verify both routes agree.
-            let ext = lang.extensions.first().or_else(|| lang.explicit_only.first()).unwrap();
+            let ext = lang
+                .extensions
+                .first()
+                .or_else(|| lang.explicit_only.first())
+                .unwrap();
             let by_file = language_for_file(Path::new(&format!("f.{ext}"))).unwrap_or_else(|| {
-                panic!(".{ext} ({}) did not resolve via language_for_file", lang.name)
+                panic!(
+                    ".{ext} ({}) did not resolve via language_for_file",
+                    lang.name
+                )
             });
             assert_eq!(
                 by_key, by_file,
