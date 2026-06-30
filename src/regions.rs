@@ -52,7 +52,10 @@ fn comment_syntax(
 
 /// If `line` is entirely a comment under `mode`'s syntax, returns the
 /// trimmed text inside the comment. Otherwise `None`.
-fn marker_text(line: &str, mode: SlocMode) -> Option<&str> {
+///
+/// Shared with [`crate::suppressions`], which recognizes a different marker
+/// vocabulary (`tools:suppress TOOL:RULE`) inside the same comment forms.
+pub(crate) fn marker_text(line: &str, mode: SlocMode) -> Option<&str> {
     let trimmed = line.trim();
     let (line_prefixes, block) = comment_syntax(mode);
 

@@ -1,6 +1,7 @@
 pub mod path_ignore;
 pub mod regions;
 pub mod registry;
+pub mod suppressions;
 
 pub use path_ignore::PathIgnore;
 pub use regions::{ignored_regions, IgnoredRegion};
@@ -9,6 +10,7 @@ pub use registry::{
     language_info_for_file, languages, sloc_mode_for_file, supported_languages_report,
     LanguageInfo, SlocMode,
 };
+pub use suppressions::{suppressions, Suppression};
 
 // Grammar re-exports — gated by feature so consumers reach grammars without
 // adding their own direct tree-sitter-* dependencies.
