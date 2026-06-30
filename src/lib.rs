@@ -3,7 +3,7 @@ pub mod registry;
 pub use registry::{
     LanguageInfo, SlocMode,
     is_parseable_extension, is_source_extension,
-    language_for_file, languages, supported_languages_report,
+    language_for_file, language_info_for_file, languages, supported_languages_report,
 };
 
 // Grammar re-exports — gated by feature so consumers reach grammars without
