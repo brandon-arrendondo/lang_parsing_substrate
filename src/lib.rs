@@ -1,8 +1,10 @@
+pub mod imports;
 pub mod path_ignore;
 pub mod regions;
 pub mod registry;
 pub mod suppressions;
 
+pub use imports::{distinct_import_count, import_sources};
 pub use path_ignore::PathIgnore;
 pub use regions::{ignored_regions, IgnoredRegion};
 pub use registry::{
