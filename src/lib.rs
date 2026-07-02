@@ -2,6 +2,7 @@ pub mod calls;
 pub mod cfg;
 pub mod imports;
 pub mod path_ignore;
+pub mod query;
 pub mod regions;
 pub mod registry;
 pub mod suppressions;
@@ -10,6 +11,10 @@ pub use calls::{call_edges, collect_local_names, get_function_name, is_function_
 pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
 pub use imports::{distinct_import_count, import_sources};
 pub use path_ignore::PathIgnore;
+pub use query::{
+    find_ancestor, find_descendants, find_descendants_of_kind, find_descendants_of_kinds,
+    find_first_descendant, nearest_ancestor_of_kind, nearest_ancestor_of_kinds, node_text,
+};
 pub use regions::{ignored_regions, IgnoredRegion};
 pub use registry::{
     is_parseable_extension, is_source_extension, language_for_file, language_for_key,
