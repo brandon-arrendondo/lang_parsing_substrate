@@ -34,24 +34,31 @@ pub fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
 /// Depth-first search (root included) for every node matching `predicate`.
 /// Descends into a matched node's children too, so nested matches (e.g. a
 /// call expression inside a call expression's arguments) are all returned.
+///
+/// Iterative (explicit stack), not recursive: a real-world config file with
+/// a multi-thousand-deep else-if chain overflowed the call stack under a
+/// naive recursive walk of this same shape in a consumer (tools_sqc task
+/// 153) — this module must not reintroduce that risk for any language/AST
+/// shape with unbounded nesting depth.
 pub fn find_descendants<'a>(root: Node<'a>, predicate: impl Fn(Node<'a>) -> bool) -> Vec<Node<'a>> {
     let mut out = Vec::new();
-    collect_descendants(root, &predicate, &mut out);
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if predicate(node) {
+            out.push(node);
+        }
+        push_children_reversed(node, &mut stack);
+    }
     out
 }
 
-fn collect_descendants<'a>(
-    node: Node<'a>,
-    predicate: &impl Fn(Node<'a>) -> bool,
-    out: &mut Vec<Node<'a>>,
-) {
-    if predicate(node) {
-        out.push(node);
-    }
+/// Pushes `node`'s children onto `stack` in reverse order, so popping the
+/// stack (LIFO) visits them in original left-to-right order — preserving
+/// the same pre-order sequence a recursive descent would produce.
+fn push_children_reversed<'a>(node: Node<'a>, stack: &mut Vec<Node<'a>>) {
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_descendants(child, predicate, out);
-    }
+    let children: Vec<Node<'a>> = node.children(&mut cursor).collect();
+    stack.extend(children.into_iter().rev());
 }
 
 /// Convenience wrapper over [`find_descendants`] for the common case of
@@ -68,22 +75,19 @@ pub fn find_descendants_of_kinds<'a>(root: Node<'a>, kinds: &[&str]) -> Vec<Node
 /// Depth-first, pre-order search (root included) for the first node matching
 /// `predicate`, short-circuiting once found — cheaper than
 /// [`find_descendants`] when only existence or the first match matters.
+///
+/// Iterative for the same reason as [`find_descendants`]: no call-stack
+/// depth tied to AST nesting depth.
 pub fn find_first_descendant<'a>(
     root: Node<'a>,
     predicate: impl Fn(Node<'a>) -> bool,
 ) -> Option<Node<'a>> {
-    search_first(root, &predicate)
-}
-
-fn search_first<'a>(node: Node<'a>, predicate: &impl Fn(Node<'a>) -> bool) -> Option<Node<'a>> {
-    if predicate(node) {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(found) = search_first(child, predicate) {
-            return Some(found);
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if predicate(node) {
+            return Some(node);
         }
+        push_children_reversed(node, &mut stack);
     }
     None
 }
@@ -205,6 +209,31 @@ mod tests {
             nearest_ancestor_of_kinds(brk, &["while_statement", "for_statement"]).unwrap();
         // The nearest loop is the `for`, not the outer `while`.
         assert_eq!(enclosing.kind(), "for_statement");
+    }
+
+    #[test]
+    #[cfg(feature = "lang-c")]
+    fn find_descendants_handles_deeply_nested_input_without_overflowing_the_stack() {
+        // Regression: a multi-thousand-deep else-if chain in a real config
+        // file overflowed the call stack under a recursive walk of this
+        // exact shape (tools_sqc task 153). 20k levels is well past any
+        // depth a recursive implementation on a normal thread stack survives.
+        let depth = 20_000;
+        let mut source = String::new();
+        source.push_str("int f(int x) {\n");
+        for _ in 0..depth {
+            source.push_str("if (x) {\n");
+        }
+        source.push_str("return 1;\n");
+        for _ in 0..depth {
+            source.push_str("}\n");
+        }
+        source.push('}');
+        let tree = parse(&source, tree_sitter_c::LANGUAGE.into());
+        let ifs = find_descendants_of_kind(tree.root_node(), "if_statement");
+        assert_eq!(ifs.len(), depth);
+        let first = find_first_descendant(tree.root_node(), |n| n.kind() == "if_statement");
+        assert!(first.is_some());
     }
 
     #[test]
