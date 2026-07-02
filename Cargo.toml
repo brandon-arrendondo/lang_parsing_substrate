@@ -1,6 +1,6 @@
 [package]
 name = "lang-parsing-substrate"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 license = "MIT"
 authors = ["Brandon Arrendondo <brandon.arrendondo@bissell.com>"]
