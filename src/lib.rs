@@ -1,4 +1,5 @@
 pub mod calls;
+pub mod cfg;
 pub mod imports;
 pub mod path_ignore;
 pub mod regions;
@@ -6,6 +7,7 @@ pub mod registry;
 pub mod suppressions;
 
 pub use calls::{call_edges, collect_local_names, get_function_name, is_function_kind, CallEdge};
+pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
 pub use imports::{distinct_import_count, import_sources};
 pub use path_ignore::PathIgnore;
 pub use regions::{ignored_regions, IgnoredRegion};
