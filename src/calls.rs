@@ -14,7 +14,8 @@
 //! cross-file call graph (deciding which external callee belongs to which
 //! other file) is a per-tool concern, same as `import_sources`.
 
-use std::collections::HashSet;
+use crate::query::find_first_descendant;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 /// One call site: `caller` (a function/macro name defined in this file)
@@ -51,6 +52,8 @@ pub fn call_edges(root: Node, source: &str) -> Vec<CallEdge> {
     let mut edges = Vec::new();
     for (node, caller) in functions {
         let mut callees = Vec::new();
+        let mut aliases = HashMap::new();
+        collect_fn_ptr_aliases(node, source, &mut aliases);
         // A syntax error anywhere in this function's subtree means its span
         // can't be trusted (see collect_call_names doc comment) — a brace
         // that opens and closes in different branches of the same repeated
@@ -58,7 +61,7 @@ pub fn call_edges(root: Node, source: &str) -> Vec<CallEdge> {
         // every subsequent sibling function as a nested descendant. In that
         // case, stop at nested function boundaries instead of attributing
         // a swallowed sibling's calls to this caller.
-        collect_call_names(node, source, node.has_error(), &mut callees);
+        collect_call_names(node, source, node.has_error(), &aliases, &mut callees);
         for callee in callees {
             let is_external = !local_names.contains(&callee);
             edges.push(CallEdge {
@@ -358,14 +361,20 @@ fn collect_local_names_recursive(node: Node, source: &str, names: &mut HashSet<S
     }
 }
 
-fn handle_call_node(node: Node, source: &str, out: &mut Vec<String>) {
+fn handle_call_node(
+    node: Node,
+    source: &str,
+    aliases: &HashMap<String, String>,
+    out: &mut Vec<String>,
+) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
     match func_node.kind() {
         "identifier" => {
             if let Ok(name) = func_node.utf8_text(source.as_bytes()) {
-                out.push(name.to_string());
+                let resolved = aliases.get(name).map(String::as_str).unwrap_or(name);
+                out.push(resolved.to_string());
             }
         }
         "scoped_identifier"
@@ -403,12 +412,18 @@ fn handle_call_node(node: Node, source: &str, out: &mut Vec<String>) {
 /// sibling's calls to the outer, corrupted caller would be wrong, so the walk
 /// stops at the boundary instead and lets the nested node be counted (in a
 /// separate, correctly-scoped pass) under its own name.
-fn collect_call_names(node: Node, source: &str, stop_at_nested: bool, out: &mut Vec<String>) {
+fn collect_call_names(
+    node: Node,
+    source: &str,
+    stop_at_nested: bool,
+    aliases: &HashMap<String, String>,
+    out: &mut Vec<String>,
+) {
     if node.kind() == "call_expression"
         || node.kind() == "call"
         || node.kind() == "invocation_expression"
     {
-        handle_call_node(node, source, out);
+        handle_call_node(node, source, aliases, out);
     }
     if node.kind() == "procedure_call_statement" || node.kind() == "function_call" {
         if let Some(name_node) = node.child_by_field_name("name") {
@@ -457,7 +472,7 @@ fn collect_call_names(node: Node, source: &str, stop_at_nested: bool, out: &mut 
         {
             continue;
         }
-        collect_call_names(child, source, stop_at_nested, out);
+        collect_call_names(child, source, stop_at_nested, aliases, out);
     }
 }
 
@@ -495,6 +510,136 @@ fn is_c_keyword(name: &str) -> bool {
             | "union"
             | "enum"
     )
+}
+
+/// Populate `aliases` with function-pointer variable → target-function
+/// mappings found inside `node`'s subtree. Matches both init declarators
+/// (`void (*fp)(char *) = foo;`) and plain assignments to a name previously
+/// declared as a function pointer (`fp = foo;`). Non-identifier initializers
+/// and compound RHS expressions are ignored.
+///
+/// The node kinds matched here (`declaration`, `init_declarator`,
+/// `function_declarator`, `pointer_declarator`) are specific to the C/C++
+/// grammar family — this simply never matches in other languages' trees, so
+/// no explicit language gate is needed (same principle as the rest of this
+/// module's node-kind dispatch).
+fn collect_fn_ptr_aliases(node: Node, source: &str, aliases: &mut HashMap<String, String>) {
+    match node.kind() {
+        "declaration" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() != "init_declarator" {
+                    continue;
+                }
+                let Some(decl) = child.child_by_field_name("declarator") else {
+                    continue;
+                };
+                if !declarator_is_function_pointer(decl) {
+                    continue;
+                }
+                let Some(name) = extract_innermost_identifier(decl, source) else {
+                    continue;
+                };
+                if let Some(value) = child.child_by_field_name("value") {
+                    if let Some(target) = rhs_target_function_name(value, source) {
+                        aliases.insert(name, target);
+                    }
+                }
+            }
+        }
+        "assignment_expression" => {
+            // Rebind an existing function-pointer alias. Only applies when the
+            // LHS is already known to be a function pointer.
+            if let (Some(lhs), Some(rhs)) = (
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            ) {
+                if lhs.kind() == "identifier" {
+                    if let Ok(lhs_name) = lhs.utf8_text(source.as_bytes()) {
+                        if aliases.contains_key(lhs_name) {
+                            if let Some(target) = rhs_target_function_name(rhs, source) {
+                                aliases.insert(lhs_name.to_string(), target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_fn_ptr_aliases(child, source, aliases);
+    }
+}
+
+/// True when a declarator subtree shapes a function pointer: it contains
+/// both a `function_declarator` (the callable signature) and a
+/// `pointer_declarator` (the indirection). A bare `function_declarator`
+/// indicates a function prototype, and a bare `pointer_declarator` is a
+/// plain pointer.
+fn declarator_is_function_pointer(node: Node) -> bool {
+    find_first_descendant(node, |n| n.kind() == "function_declarator").is_some()
+        && find_first_descendant(node, |n| n.kind() == "pointer_declarator").is_some()
+}
+
+/// Find the deepest identifier under a declarator chain (the name being
+/// declared). For `(*fp)` this is `fp`.
+fn extract_innermost_identifier(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        return node.utf8_text(source.as_bytes()).ok().map(String::from);
+    }
+    if let Some(inner) = node.child_by_field_name("declarator") {
+        if let Some(name) = extract_innermost_identifier(inner, source) {
+            return Some(name);
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(name) = extract_innermost_identifier(child, source) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Return the target-function identifier for a function-pointer RHS.
+/// Accepts `foo` and `&foo`; anything else is None.
+fn rhs_target_function_name(node: Node, source: &str) -> Option<String> {
+    let mut n = node;
+    // Unwrap parens/casts and leading `&`.
+    loop {
+        match n.kind() {
+            "parenthesized_expression" => {
+                if let Some(inner) = n.named_child(0) {
+                    n = inner;
+                    continue;
+                }
+                return None;
+            }
+            "cast_expression" => {
+                if let Some(value) = n.child_by_field_name("value") {
+                    n = value;
+                    continue;
+                }
+                return None;
+            }
+            "pointer_expression" | "unary_expression" => {
+                // `&foo` — unwrap to `foo`.
+                if let Some(arg) = n.child_by_field_name("argument") {
+                    n = arg;
+                    continue;
+                }
+                return None;
+            }
+            _ => break,
+        }
+    }
+    if n.kind() == "identifier" {
+        n.utf8_text(source.as_bytes()).ok().map(String::from)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1092,6 +1237,63 @@ no_mem:
             e.iter()
                 .any(|c| c.caller == "valueFromExpr" && c.callee == "valueFromFunction"),
             "real call inside a mis-parsed if-block was dropped"
+        );
+    }
+
+    #[test]
+    fn c_resolves_fn_ptr_alias() {
+        // Juliet variant 65a pattern: function pointer assigned to a sink
+        // function, then invoked via the pointer. The call graph should
+        // record the underlying function as a callee of `caller`, not `fp`.
+        let code = "void target(char *d) {}\n\
+                    void caller(void) {\n\
+                        void (*fp)(char *) = target;\n\
+                        char *data = 0;\n\
+                        fp(data);\n\
+                    }";
+        let e = edges("c", code);
+        assert!(
+            e.iter()
+                .any(|c| c.caller == "caller" && c.callee == "target"),
+            "expected 'target' as a callee of 'caller', got {e:?}"
+        );
+        assert!(
+            !e.iter().any(|c| c.callee == "fp"),
+            "the raw pointer name 'fp' should never appear as a callee: {e:?}"
+        );
+    }
+
+    #[test]
+    fn c_resolves_fn_ptr_address_of() {
+        // Initializer uses the address-of form `&target`, exercising the
+        // unary-argument unwrap in rhs_target_function_name.
+        let code = "void target(int x) {}\n\
+                    void caller(void) {\n\
+                        int (*fp)(int) = &target;\n\
+                        fp(1);\n\
+                    }";
+        let e = edges("c", code);
+        assert!(
+            e.iter()
+                .any(|c| c.caller == "caller" && c.callee == "target"),
+            "expected 'target' as a callee of 'caller', got {e:?}"
+        );
+    }
+
+    #[test]
+    fn c_plain_pointer_not_aliased() {
+        // A plain pointer assignment `int *p = &x;` is not a function
+        // pointer -- make sure we don't pollute the call graph with `x`
+        // as a callee just because p is later indirected somehow.
+        let code = "void caller(void) {\n\
+                        int x = 0;\n\
+                        int *p = &x;\n\
+                        *p = 1;\n\
+                    }";
+        let e = edges("c", code);
+        assert!(
+            !e.iter().any(|c| c.callee == "x"),
+            "plain pointer decl should not produce a callee edge: {e:?}"
         );
     }
 }
