@@ -450,12 +450,51 @@ fn collect_call_names(node: Node, source: &str, stop_at_nested: bool, out: &mut 
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if stop_at_nested && is_function_kind(child.kind()) && !is_macro_function_definition(child)
+        if stop_at_nested
+            && is_function_kind(child.kind())
+            && !is_macro_function_definition(child)
+            && !is_error_recovery_debris(child, source)
         {
             continue;
         }
         collect_call_names(child, source, stop_at_nested, out);
     }
+}
+
+/// True when a function-like node's extracted name is actually a bare C/C++
+/// keyword (`if`, `while`, ...). Under error recovery, tree-sitter-c can
+/// mis-parse ordinary control flow as a nameless function_definition-shaped
+/// node whose "name" resolves to the keyword itself — that node will never
+/// get its own call-graph entry, so treating it as a real nested sibling and
+/// stopping at its boundary would silently drop the real calls inside it.
+/// Scoped to `function_definition` (C/C++/Lua's shared kind) since that's
+/// the only kind this failure mode has been reproduced against; other
+/// languages' function-like kinds are left as-is absent similar evidence.
+fn is_error_recovery_debris(node: Node, source: &str) -> bool {
+    node.kind() == "function_definition"
+        && get_function_name(node, source).is_some_and(|name| is_c_keyword(&name))
+}
+
+fn is_c_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "if" | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "switch"
+            | "case"
+            | "default"
+            | "return"
+            | "break"
+            | "continue"
+            | "goto"
+            | "sizeof"
+            | "typedef"
+            | "struct"
+            | "union"
+            | "enum"
+    )
 }
 
 #[cfg(test)]
@@ -859,5 +898,200 @@ int sqlite3Init(sqlite3 *db, char **pzErrMsg){
         assert!(!e
             .iter()
             .any(|c| c.caller == "sqlite3InitOne" && c.callee == "sqlite3CommitInternalChanges"));
+    }
+
+    /// Regression for a second false-negative discovered while validating the
+    /// has_error() fix above (tools_sqc task 267/296): sqlite3/src/vdbemem.c's
+    /// valueFromExpr has an unrelated, separate parse error that makes
+    /// tree-sitter-c mis-parse one of its `if` blocks as a
+    /// function_definition-shaped node whose extracted "name" resolves to the
+    /// keyword `if` itself. Without the is_error_recovery_debris() check, the
+    /// naive stop-at-any-nested-function_definition guard treated that debris
+    /// as a real swallowed sibling and stopped descending into it, silently
+    /// dropping the real call to valueFromFunction that lives textually
+    /// inside it.
+    #[test]
+    fn c_mis_parsed_if_does_not_lose_real_calls() {
+        let code = r#"static int valueFromExpr(
+  sqlite3 *db,                    /* The database connection */
+  const Expr *pExpr,              /* The expression to evaluate */
+  u8 enc,                         /* Encoding to use */
+  u8 affinity,                    /* Affinity to use */
+  sqlite3_value **ppVal,          /* Write the new value here */
+  struct ValueNewStat4Ctx *pCtx   /* Second argument for valueNew() */
+){
+  int op;
+  char *zVal = 0;
+  sqlite3_value *pVal = 0;
+  int negInt = 1;
+  const char *zNeg = "";
+  int rc = SQLITE_OK;
+
+  assert( pExpr!=0 );
+  while( (op = pExpr->op)==TK_UPLUS || op==TK_SPAN ) pExpr = pExpr->pLeft;
+  if( op==TK_REGISTER ) op = pExpr->op2;
+
+  /* Compressed expressions only appear when parsing the DEFAULT clause
+  ** on a table column definition, and hence only when pCtx==0.  This
+  ** check ensures that an EP_TokenOnly expression is never passed down
+  ** into valueFromFunction(). */
+  assert( (pExpr->flags & EP_TokenOnly)==0 || pCtx==0 );
+
+  if( op==TK_CAST ){
+    u8 aff;
+    assert( !ExprHasProperty(pExpr, EP_IntValue) );
+    aff = sqlite3AffinityType(pExpr->u.zToken,0);
+    rc = valueFromExpr(db, pExpr->pLeft, enc, aff, ppVal, pCtx);
+    testcase( rc!=SQLITE_OK );
+    if( *ppVal ){
+#ifdef SQLITE_ENABLE_STAT4
+      rc = ExpandBlob(*ppVal);
+#else
+      /* zero-blobs only come from functions, not literal values.  And
+      ** functions are only processed under STAT4 */
+      assert( (ppVal[0][0].flags & MEM_Zero)==0 );
+#endif
+      sqlite3VdbeMemCast(*ppVal, aff, enc);
+      sqlite3ValueApplyAffinity(*ppVal, affinity, enc);
+    }
+    return rc;
+  }
+
+  /* Handle negative integers in a single step.  This is needed in the
+  ** case when the value is -9223372036854775808. Except - do not do this
+  ** for hexadecimal literals.  */
+  if( op==TK_UMINUS ){
+    Expr *pLeft = pExpr->pLeft;
+    if( (pLeft->op==TK_INTEGER || pLeft->op==TK_FLOAT) ){
+      if( ExprHasProperty(pLeft, EP_IntValue)
+       || pLeft->u.zToken[0]!='0' || (pLeft->u.zToken[1] & ~0x20)!='X'
+      ){
+        pExpr = pLeft;
+        op = pExpr->op;
+        negInt = -1;
+        zNeg = "-";
+      }
+    }
+  }
+
+  if( op==TK_STRING || op==TK_FLOAT || op==TK_INTEGER ){
+    pVal = valueNew(db, pCtx);
+    if( pVal==0 ) goto no_mem;
+    if( ExprHasProperty(pExpr, EP_IntValue) ){
+      sqlite3VdbeMemSetInt64(pVal, (i64)pExpr->u.iValue*negInt);
+    }else{
+      i64 iVal;
+      if( op==TK_INTEGER && 0==sqlite3DecOrHexToI64(pExpr->u.zToken, &iVal) ){
+        sqlite3VdbeMemSetInt64(pVal, iVal*negInt);
+      }else{
+        zVal = sqlite3MPrintf(db, "%s%s", zNeg, pExpr->u.zToken);
+        if( zVal==0 ) goto no_mem;
+        sqlite3ValueSetStr(pVal, -1, zVal, SQLITE_UTF8, SQLITE_DYNAMIC);
+      }
+    }
+    if( affinity==SQLITE_AFF_BLOB ){
+      if( op==TK_FLOAT ){
+        assert( pVal && pVal->z && pVal->flags==(MEM_Str|MEM_Term) );
+        sqlite3AtoF(pVal->z, &pVal->u.r);
+        pVal->flags = MEM_Real;
+      }else if( op==TK_INTEGER ){
+        /* This case is required by -9223372036854775808 and other strings
+        ** that look like integers but cannot be handled by the
+        ** sqlite3DecOrHexToI64() call above.  */
+        sqlite3ValueApplyAffinity(pVal, SQLITE_AFF_NUMERIC, SQLITE_UTF8);
+      }
+    }else{
+      sqlite3ValueApplyAffinity(pVal, affinity, SQLITE_UTF8);
+    }
+    assert( (pVal->flags & MEM_IntReal)==0 );
+    if( pVal->flags & (MEM_Int|MEM_IntReal|MEM_Real) ){
+      testcase( pVal->flags & MEM_Int );
+      testcase( pVal->flags & MEM_Real );
+      pVal->flags &= ~MEM_Str;
+    }
+    if( enc!=SQLITE_UTF8 ){
+      rc = sqlite3VdbeChangeEncoding(pVal, enc);
+    }
+  }else if( op==TK_UMINUS ) {
+    /* This branch happens for multiple negative signs.  Ex: -(-5) */
+    if( SQLITE_OK==valueFromExpr(db,pExpr->pLeft,enc,affinity,&pVal,pCtx)
+     && pVal!=0
+    ){
+      sqlite3VdbeMemNumerify(pVal);
+      if( pVal->flags & MEM_Real ){
+        pVal->u.r = -pVal->u.r;
+      }else if( pVal->u.i==SMALLEST_INT64 ){
+#ifndef SQLITE_OMIT_FLOATING_POINT
+        pVal->u.r = -(double)SMALLEST_INT64;
+#else
+        pVal->u.r = LARGEST_INT64;
+#endif
+        MemSetTypeFlag(pVal, MEM_Real);
+      }else{
+        pVal->u.i = -pVal->u.i;
+      }
+      sqlite3ValueApplyAffinity(pVal, affinity, enc);
+    }
+  }else if( op==TK_NULL ){
+    pVal = valueNew(db, pCtx);
+    if( pVal==0 ) goto no_mem;
+    sqlite3VdbeMemSetNull(pVal);
+  }
+#ifndef SQLITE_OMIT_BLOB_LITERAL
+  else if( op==TK_BLOB ){
+    int nVal;
+    assert( !ExprHasProperty(pExpr, EP_IntValue) );
+    assert( pExpr->u.zToken[0]=='x' || pExpr->u.zToken[0]=='X' );
+    assert( pExpr->u.zToken[1]=='\'' );
+    pVal = valueNew(db, pCtx);
+    if( !pVal ) goto no_mem;
+    zVal = &pExpr->u.zToken[2];
+    nVal = sqlite3Strlen30(zVal)-1;
+    assert( zVal[nVal]=='\'' );
+    sqlite3VdbeMemSetStr(pVal, sqlite3HexToBlob(db, zVal, nVal), nVal/2,
+                         0, SQLITE_DYNAMIC);
+  }
+#endif
+#ifdef SQLITE_ENABLE_STAT4
+  else if( op==TK_FUNCTION && pCtx!=0 ){
+    rc = valueFromFunction(db, pExpr, enc, affinity, &pVal, pCtx);
+  }
+#endif
+  else if( op==TK_TRUEFALSE ){
+    assert( !ExprHasProperty(pExpr, EP_IntValue) );
+    pVal = valueNew(db, pCtx);
+    if( pVal ){
+      pVal->flags = MEM_Int;
+      pVal->u.i = pExpr->u.zToken[4]==0;
+      sqlite3ValueApplyAffinity(pVal, affinity, enc);
+    }
+  }
+
+  *ppVal = pVal;
+  return rc;
+
+no_mem:
+#ifdef SQLITE_ENABLE_STAT4
+  if( pCtx==0 || NEVER(pCtx->pParse->nErr==0) )
+#endif
+    sqlite3OomFault(db);
+  sqlite3DbFree(db, zVal);
+  assert( *ppVal==0 );
+#ifdef SQLITE_ENABLE_STAT4
+  if( pCtx==0 ) sqlite3ValueFree(pVal);
+#else
+  assert( pCtx==0 ); sqlite3ValueFree(pVal);
+#endif
+  return SQLITE_NOMEM_BKPT;
+}
+
+/*
+"#;
+        let e = edges("c", code);
+        assert!(
+            e.iter()
+                .any(|c| c.caller == "valueFromExpr" && c.callee == "valueFromFunction"),
+            "real call inside a mis-parsed if-block was dropped"
+        );
     }
 }
