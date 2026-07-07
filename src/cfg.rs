@@ -170,6 +170,43 @@ pub fn build_function_cfg<'a>(
     Some(builder.finish())
 }
 
+/// One unit of pending work in `CfgBuilder::visit`'s explicit continuation
+/// stack. `Visit` mirrors a call to the old recursive `visit`/`build_block`;
+/// each `After*` variant is a resumption point holding exactly the state a
+/// `process_*` method used to keep in local variables across its own
+/// (now-removed) recursive call — see `visit`'s doc comment for how they're
+/// sequenced.
+enum Task<'a> {
+    Visit(Node<'a>),
+    AfterIfTrue {
+        if_node: Node<'a>,
+        header: BlockId,
+    },
+    AfterIfFalse {
+        if_node: Node<'a>,
+        true_end: BlockId,
+    },
+    AfterWhileBody {
+        header: BlockId,
+        after: BlockId,
+    },
+    AfterForBody {
+        for_node: Node<'a>,
+        header: BlockId,
+        after: BlockId,
+    },
+    AfterUnconditionalLoopBody {
+        header: BlockId,
+        after: BlockId,
+    },
+    AfterDoWhileBody {
+        do_node: Node<'a>,
+        body_start: BlockId,
+        footer: BlockId,
+        after: BlockId,
+    },
+}
+
 struct CfgBuilder {
     shapes: &'static Shapes,
     blocks: Vec<BasicBlock>,
@@ -246,23 +283,104 @@ impl CfgBuilder {
         node
     }
 
+    /// Iterative (explicit continuation stack), not recursive: a real-world
+    /// function with a multi-thousand-deep nested control structure
+    /// overflowed the call stack under the naive recursive version this
+    /// replaces (the same failure mode `crate::query`'s traversal helpers
+    /// guard against). `Task::Visit` mirrors the old `visit`/`build_block`
+    /// dispatch; the `Task::After*` variants carry exactly the state each
+    /// `process_*` method used to hold in local variables across its own
+    /// (now-removed) recursive `self.visit(...)` call — e.g. `AfterIfTrue`
+    /// resumes exactly where `process_if` used to continue after visiting
+    /// the consequence, with `header` in hand to wire up the false branch.
+    /// Pushing an `After*` task and then (optionally) a `Visit` task on top
+    /// of it reproduces "call, then continue here when it returns": the
+    /// `Visit` and everything it pushes drains first (LIFO), only then does
+    /// the `After*` task run — same order a real call stack would give.
     fn visit(&mut self, node: Node, source: &[u8]) {
+        let mut stack = vec![Task::Visit(node)];
+        while let Some(task) = stack.pop() {
+            match task {
+                Task::Visit(node) => self.dispatch(node, source, &mut stack),
+                Task::AfterIfTrue { if_node, header } => {
+                    let true_end = self.current;
+                    let false_start = self.new_block(if_node.start_byte());
+                    self.add_edge(header, false_start, CfgEdge::FalseBranch);
+                    self.current = false_start;
+                    stack.push(Task::AfterIfFalse { if_node, true_end });
+                    if let Some(alt) = if_node.child_by_field_name("alternative") {
+                        let alt = self.unwrap(alt, self.shapes.else_wrapper_kinds);
+                        stack.push(Task::Visit(alt));
+                    }
+                }
+                Task::AfterIfFalse { if_node, true_end } => {
+                    let false_end = self.current;
+                    let join_block = self.new_block(if_node.end_byte());
+                    self.join(true_end, join_block, CfgEdge::Fallthrough);
+                    self.join(false_end, join_block, CfgEdge::Fallthrough);
+                    self.current = join_block;
+                }
+                Task::AfterWhileBody { header, after } => {
+                    self.loop_stack.pop();
+                    self.join(self.current, header, CfgEdge::BackEdge);
+                    self.current = after;
+                }
+                Task::AfterForBody {
+                    for_node,
+                    header,
+                    after,
+                } => {
+                    self.loop_stack.pop();
+                    if let Some(update) = for_node.child_by_field_name("update") {
+                        if !self.terminated[self.current] {
+                            self.append_stmt(update);
+                        }
+                    }
+                    self.join(self.current, header, CfgEdge::BackEdge);
+                    self.current = after;
+                }
+                Task::AfterUnconditionalLoopBody { header, after } => {
+                    self.loop_stack.pop();
+                    self.join(self.current, header, CfgEdge::BackEdge);
+                    self.current = after;
+                }
+                Task::AfterDoWhileBody {
+                    do_node,
+                    body_start,
+                    footer,
+                    after,
+                } => {
+                    self.loop_stack.pop();
+                    self.join(self.current, footer, CfgEdge::Fallthrough);
+                    if let Some(cond) = do_node.child_by_field_name("condition") {
+                        self.blocks[footer].condition_range =
+                            Some((cond.start_byte(), cond.end_byte()));
+                    }
+                    self.add_edge(footer, body_start, CfgEdge::BackEdge);
+                    self.add_edge(footer, after, CfgEdge::FalseBranch);
+                    self.current = after;
+                }
+            }
+        }
+    }
+
+    fn dispatch<'a>(&mut self, node: Node<'a>, _source: &[u8], stack: &mut Vec<Task<'a>>) {
         let node = self.unwrap(node, self.shapes.stmt_wrapper_kinds);
         let kind = node.kind();
         let shapes = self.shapes;
 
         if shapes.block_kinds.contains(&kind) {
-            self.build_block(node, source);
+            self.push_block_children(node, stack);
         } else if shapes.if_kinds.contains(&kind) {
-            self.process_if(node, source);
+            self.process_if(node, stack);
         } else if shapes.while_kinds.contains(&kind) {
-            self.process_while(node, source);
+            self.process_while(node, stack);
         } else if shapes.for_kinds.contains(&kind) {
-            self.process_for(node, source);
+            self.process_for(node, stack);
         } else if shapes.unconditional_loop_kinds.contains(&kind) {
-            self.process_unconditional_loop(node, source);
+            self.process_unconditional_loop(node, stack);
         } else if shapes.do_while_kinds.contains(&kind) {
-            self.process_do_while(node, source);
+            self.process_do_while(node, stack);
         } else if shapes.return_kinds.contains(&kind) {
             self.append_stmt(node);
             let next = self.new_block(node.end_byte());
@@ -291,16 +409,19 @@ impl CfgBuilder {
         }
     }
 
-    fn build_block(&mut self, node: Node, source: &[u8]) {
+    /// Pushes a block's named children as `Visit` tasks in reverse order, so
+    /// popping the (LIFO) stack visits them in original left-to-right order —
+    /// the same sequence `build_block`'s `for` loop used to produce.
+    fn push_block_children<'a>(&self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.is_named() {
-                self.visit(child, source);
-            }
-        }
+        let children: Vec<Node<'a>> = node
+            .children(&mut cursor)
+            .filter(|c| c.is_named())
+            .collect();
+        stack.extend(children.into_iter().rev().map(Task::Visit));
     }
 
-    fn process_if(&mut self, node: Node, source: &[u8]) {
+    fn process_if<'a>(&mut self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         let header = self.current;
         if let Some(cond) = node.child_by_field_name("condition") {
             self.blocks[header].condition_range = Some((cond.start_byte(), cond.end_byte()));
@@ -309,27 +430,17 @@ impl CfgBuilder {
         let true_start = self.new_block(node.start_byte());
         self.add_edge(header, true_start, CfgEdge::TrueBranch);
         self.current = true_start;
+
+        stack.push(Task::AfterIfTrue {
+            if_node: node,
+            header,
+        });
         if let Some(cons) = node.child_by_field_name("consequence") {
-            self.visit(cons, source);
+            stack.push(Task::Visit(cons));
         }
-        let true_end = self.current;
-
-        let false_start = self.new_block(node.start_byte());
-        self.add_edge(header, false_start, CfgEdge::FalseBranch);
-        self.current = false_start;
-        if let Some(alt) = node.child_by_field_name("alternative") {
-            let alt = self.unwrap(alt, self.shapes.else_wrapper_kinds);
-            self.visit(alt, source);
-        }
-        let false_end = self.current;
-
-        let join_block = self.new_block(node.end_byte());
-        self.join(true_end, join_block, CfgEdge::Fallthrough);
-        self.join(false_end, join_block, CfgEdge::Fallthrough);
-        self.current = join_block;
     }
 
-    fn process_while(&mut self, node: Node, source: &[u8]) {
+    fn process_while<'a>(&mut self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         let prev = self.current;
         let header = self.new_block(node.start_byte());
         self.join(prev, header, CfgEdge::Fallthrough);
@@ -344,20 +455,17 @@ impl CfgBuilder {
         self.current = body_start;
 
         self.loop_stack.push((header, after));
+        stack.push(Task::AfterWhileBody { header, after });
         if let Some(body) = node.child_by_field_name("body") {
-            self.visit(body, source);
+            stack.push(Task::Visit(body));
         }
-        self.loop_stack.pop();
-
-        self.join(self.current, header, CfgEdge::BackEdge);
-        self.current = after;
     }
 
     /// Pre-test loop with optional `initializer`/`condition`/`update`
     /// (covers C's `for (init; cond; update)` and Rust's `for pat in val`,
     /// which has neither initializer/update nor a literal condition node
     /// but the same "test, maybe enter body, maybe exit" shape).
-    fn process_for(&mut self, node: Node, source: &[u8]) {
+    fn process_for<'a>(&mut self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         if let Some(init) = node.child_by_field_name("initializer") {
             self.append_stmt(init);
         }
@@ -375,24 +483,20 @@ impl CfgBuilder {
         self.current = body_start;
 
         self.loop_stack.push((header, after));
+        stack.push(Task::AfterForBody {
+            for_node: node,
+            header,
+            after,
+        });
         if let Some(body) = node.child_by_field_name("body") {
-            self.visit(body, source);
+            stack.push(Task::Visit(body));
         }
-        self.loop_stack.pop();
-
-        if let Some(update) = node.child_by_field_name("update") {
-            if !self.terminated[self.current] {
-                self.append_stmt(update);
-            }
-        }
-        self.join(self.current, header, CfgEdge::BackEdge);
-        self.current = after;
     }
 
     /// A loop with no implicit exit test (Rust's `loop { .. }`) — the header
     /// doubles as the body-entry block, and `after` is reachable only via an
     /// explicit `break` inside the body.
-    fn process_unconditional_loop(&mut self, node: Node, source: &[u8]) {
+    fn process_unconditional_loop<'a>(&mut self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         let prev = self.current;
         let header = self.new_block(node.start_byte());
         self.join(prev, header, CfgEdge::Fallthrough);
@@ -400,16 +504,13 @@ impl CfgBuilder {
         self.current = header;
 
         self.loop_stack.push((header, after));
+        stack.push(Task::AfterUnconditionalLoopBody { header, after });
         if let Some(body) = node.child_by_field_name("body") {
-            self.visit(body, source);
+            stack.push(Task::Visit(body));
         }
-        self.loop_stack.pop();
-
-        self.join(self.current, header, CfgEdge::BackEdge);
-        self.current = after;
     }
 
-    fn process_do_while(&mut self, node: Node, source: &[u8]) {
+    fn process_do_while<'a>(&mut self, node: Node<'a>, stack: &mut Vec<Task<'a>>) {
         let prev = self.current;
         let body_start = self.new_block(node.start_byte());
         self.join(prev, body_start, CfgEdge::Fallthrough);
@@ -418,18 +519,15 @@ impl CfgBuilder {
         self.current = body_start;
 
         self.loop_stack.push((footer, after));
+        stack.push(Task::AfterDoWhileBody {
+            do_node: node,
+            body_start,
+            footer,
+            after,
+        });
         if let Some(body) = node.child_by_field_name("body") {
-            self.visit(body, source);
+            stack.push(Task::Visit(body));
         }
-        self.loop_stack.pop();
-
-        self.join(self.current, footer, CfgEdge::Fallthrough);
-        if let Some(cond) = node.child_by_field_name("condition") {
-            self.blocks[footer].condition_range = Some((cond.start_byte(), cond.end_byte()));
-        }
-        self.add_edge(footer, body_start, CfgEdge::BackEdge);
-        self.add_edge(footer, after, CfgEdge::FalseBranch);
-        self.current = after;
     }
 
     fn finish(self) -> FunctionCfg {
@@ -605,6 +703,32 @@ mod tests {
         assert!(kinds.contains(&CfgEdge::FalseBranch));
         assert!(kinds.contains(&CfgEdge::Break));
         assert_eq!(kinds.iter().filter(|k| **k == CfgEdge::Return).count(), 2);
+    }
+
+    #[test]
+    fn c_deeply_nested_if_chain_does_not_overflow_the_stack() {
+        // Regression: the pre-iterative CfgBuilder::visit recursed once per
+        // nesting level. A real caller (knots) hit this via a syntactically
+        // valid but deeply nested C file — reproduced here at a depth well
+        // past what a recursive implementation survives on a normal thread
+        // stack (see query.rs's analogous 20k-deep regression test).
+        let depth = 20_000;
+        let mut source = String::new();
+        source.push_str("int f(int x) {\n");
+        for _ in 0..depth {
+            source.push_str("if (x) {\n");
+        }
+        source.push_str("return 1;\n");
+        for _ in 0..depth {
+            source.push_str("}\n");
+        }
+        source.push('}');
+        let cfg = c_cfg(&source);
+        let kinds = edge_kinds(&cfg);
+        assert_eq!(
+            kinds.iter().filter(|k| **k == CfgEdge::TrueBranch).count(),
+            depth
+        );
     }
 
     #[test]
