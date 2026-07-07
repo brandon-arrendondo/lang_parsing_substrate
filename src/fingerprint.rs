@@ -25,6 +25,19 @@
 //! is used deliberately over `RandomState`-seeded hashing: fingerprints are
 //! meant to be persisted (e.g. tools_sqc's SQLite store) and compared across
 //! separate process runs, so the hash must be stable, not per-process-random.
+//!
+//! One deliberate exception to "ignore identifier text": the hashed node's
+//! own declared/return type, if its grammar exposes one under a recognized
+//! field name (see [`declared_type_text`]). Two functions with the identical
+//! "new accumulator, delegate, return" skeleton but different declared
+//! return types (`-> Vec<String>` vs. `-> Vec<RuleViolation>`) previously
+//! hashed identically, since `type_identifier` is the same *kind* regardless
+//! of which name it holds — a real false-positive surfaced by an actual
+//! clone-detection pass on a ~11k-function corpus (`todo.db` task 62).
+//! Parameter/variable *names* are still ignored, preserving Type-2
+//! (renamed-identifier) clone matching; only the type annotation's text is
+//! folded in, and only for the top-level node being hashed, not every
+//! descendant.
 
 use crate::calls::{get_function_name, is_function_kind};
 use crate::query::find_descendants;
@@ -105,9 +118,11 @@ pub fn duplicate_groups<S: Ord + Clone>(
 /// Structural hash of `node`'s subtree — the same primitive
 /// [`function_fingerprints`] uses internally, exposed directly for callers
 /// that want to fingerprint an arbitrary subtree rather than every function
-/// in a file (e.g. hashing a single already-located node).
-pub fn structural_hash(node: Node) -> u64 {
-    hash_and_count(node).0
+/// in a file (e.g. hashing a single already-located node). `source` is the
+/// full file text `node` was parsed from, needed to read `node`'s declared
+/// type text (see the module doc comment).
+pub fn structural_hash(node: Node, source: &[u8]) -> u64 {
+    hash_and_count(node, source).0
 }
 
 /// Fingerprints every function-like subtree in `tree` (per
@@ -121,7 +136,7 @@ pub fn function_fingerprints(root: Node, source: &str, min_nodes: usize) -> Vec<
     find_descendants(root, |n| is_function_kind(n.kind()))
         .into_iter()
         .filter_map(|node| {
-            let (hash, node_count) = hash_and_count(node);
+            let (hash, node_count) = hash_and_count(node, source.as_bytes());
             if node_count < min_nodes {
                 return None;
             }
@@ -143,8 +158,9 @@ pub fn function_fingerprints(root: Node, source: &str, min_nodes: usize) -> Vec<
 /// depth-safety rationale — a real-world deeply-nested file must not
 /// overflow the call stack here any more than it does in `find_descendants`)
 /// that folds each node's `kind()` and `child_count()` into a single hash,
-/// returning it alongside the subtree's total node count.
-fn hash_and_count(root: Node) -> (u64, usize) {
+/// returning it alongside the subtree's total node count. Also folds in
+/// `root`'s own declared type text, if any (see [`declared_type_text`]).
+fn hash_and_count(root: Node, source: &[u8]) -> (u64, usize) {
     let mut hasher = DefaultHasher::new();
     let mut count = 0usize;
     let mut stack = vec![root];
@@ -156,7 +172,26 @@ fn hash_and_count(root: Node) -> (u64, usize) {
         let children: Vec<Node> = node.children(&mut cursor).collect();
         stack.extend(children.into_iter().rev());
     }
+    if let Some(type_text) = declared_type_text(root, source) {
+        type_text.hash(&mut hasher);
+    }
     (hasher.finish(), count)
+}
+
+/// Best-effort source text of `node`'s own declared/return type, tried
+/// across the handful of field names different grammars use for it: Rust's
+/// `function_item` names it `return_type`, Go's `function_declaration`
+/// names it `result`, and C/Java/several others just call it `type` (which
+/// is safe to read here since we only ever query it on `node` itself, never
+/// descend into unrelated fields like a parameter's own `type`). Returns
+/// `None` for languages/nodes with no such field (e.g. Python without a
+/// `-> T` annotation) — those get no additional disambiguation, same as
+/// before this fold was added.
+fn declared_type_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    ["return_type", "result", "type"].iter().find_map(|field| {
+        let type_node = node.child_by_field_name(field)?;
+        std::str::from_utf8(&source[type_node.start_byte()..type_node.end_byte()]).ok()
+    })
 }
 
 #[cfg(test)]
@@ -244,9 +279,63 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let direct = structural_hash(fn_node);
+        let direct = structural_hash(fn_node, source.as_bytes());
         let via_fingerprints = function_fingerprints(tree.root_node(), source, 0)[0].hash;
         assert_eq!(direct, via_fingerprints);
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn same_skeleton_different_return_type_hashes_differently() {
+        // The exact false positive from todo.db task 62: a "new accumulator,
+        // delegate, return" skeleton that's structurally the same AST shape
+        // whether it collects names or collects violations — only the
+        // declared return type's *text* distinguishes them, since
+        // `type_identifier` is the same node kind regardless of which name
+        // it holds.
+        let names = "fn collect_names(&self, node: &Node) -> Vec<String> { \
+            let mut names = Vec::new(); self.collect_names_recursive(node, &mut names); names }";
+        let violations = "fn check(&self, node: &Node) -> Vec<RuleViolation> { \
+            let mut violations = Vec::new(); self.check_x(node, &mut violations); violations }";
+        let tree_a = parse(names, tree_sitter_rust::LANGUAGE.into());
+        let tree_b = parse(violations, tree_sitter_rust::LANGUAGE.into());
+        let fp_a = function_fingerprints(tree_a.root_node(), names, 0);
+        let fp_b = function_fingerprints(tree_b.root_node(), violations, 0);
+        assert_ne!(fp_a[0].hash, fp_b[0].hash);
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn same_skeleton_same_return_type_still_hashes_identically() {
+        // Renamed identifiers/params still match when the declared return
+        // type text is the same — the fold must not break Type-2 clone
+        // detection for the common case.
+        let a = "fn collect_names(&self, node: &Node) -> Vec<String> { \
+            let mut out = Vec::new(); self.walk(node, &mut out); out }";
+        let b = "fn gather_ids(&self, root: &Node) -> Vec<String> { \
+            let mut acc = Vec::new(); self.walk(root, &mut acc); acc }";
+        let tree_a = parse(a, tree_sitter_rust::LANGUAGE.into());
+        let tree_b = parse(b, tree_sitter_rust::LANGUAGE.into());
+        let fp_a = function_fingerprints(tree_a.root_node(), a, 0);
+        let fp_b = function_fingerprints(tree_b.root_node(), b, 0);
+        assert_eq!(fp_a[0].hash, fp_b[0].hash);
+    }
+
+    #[test]
+    #[cfg(feature = "lang-c")]
+    fn function_with_no_type_annotation_still_hashes() {
+        // Sanity check that the best-effort field lookup doesn't panic or
+        // change behavior for grammars/nodes with no matching field —
+        // `duplicate_groups_finds_clones_across_files` below already
+        // exercises the same-return-type case; this exercises a node kind
+        // (`if_statement`) with none of the three candidate fields at all.
+        let source = "int f(int x) { if (x) { return x; } return 0; }";
+        let tree = parse(source, tree_sitter_c::LANGUAGE.into());
+        let if_node = find_descendants(tree.root_node(), |n| n.kind() == "if_statement")
+            .into_iter()
+            .next()
+            .unwrap();
+        let _ = structural_hash(if_node, source.as_bytes());
     }
 
     #[test]
