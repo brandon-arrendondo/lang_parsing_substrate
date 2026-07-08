@@ -15,8 +15,12 @@ three downstream consumers:
 - **knots** — possibly relevant to complexity metrics, though this is the
   weakest of the three motivating cases.
 
-See `todo.db` task 22 (tags: `research`, `c`, `registry`) for the tracked
-task this research feeds into.
+This doc is the complete brief — it does not depend on or reference any
+external tracker. When the research and implementation plan below are done,
+whoever picks this back up on the original machine is responsible for
+recording it in that machine's task tracker; no action needed here beyond
+writing the findings into this file (or a sibling file, per "What to
+produce" below).
 
 ## Design intent already agreed on (do not re-litigate without cause)
 
@@ -103,5 +107,7 @@ A short findings write-up (append to this file or a new
   transition that are reliable enough to build on, and which transitions (if
   any) should be dropped as infeasible.
 - An implementation plan (module shape, function signature, test strategy)
-  ready to hand to a build phase — save this as the next update to `todo.db`
-  task 22.
+  ready to hand to a build phase. Append it to this file under a `## Findings
+  and implementation plan` heading (or a new `docs/c-standard-detection-
+  findings.md` that this file links to) so it travels with the repo and
+  needs no separate tracker entry to be usable.
