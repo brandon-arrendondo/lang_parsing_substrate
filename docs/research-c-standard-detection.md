@@ -320,3 +320,16 @@ overhead. Track the highest standard seen; short-circuit once `C23` is hit.
   than either fixture alone.
 
 This plan is ready to hand to a build phase.
+
+### 6. Implemented
+
+Implemented as planned in `src/c_standard.rs` (`detect_min_c_standard`,
+`CStandard`), re-exported from the crate root. One deviation found during
+implementation, documented in the module itself: `#embed` used inside an
+aggregate initializer's braces (its most common real-world position) parses
+as an `ERROR` node rather than `preproc_call` in `tree-sitter-c 0.24.2`, so
+that specific position is a known false negative — only a top-level
+`#embed` is detected. 21 unit tests cover every kept marker, the three
+negative/GNU-collision fixtures, the macro-guarded known-limitation case,
+and the monotonicity property, all passing alongside the crate's existing
+117 tests.

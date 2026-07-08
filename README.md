@@ -15,6 +15,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | `imports` | Per-file import/use-statement extraction, for building efferent-coupling (Ce) edges |
 | `calls` | Per-file call-graph edge extraction (`caller` → `callee`), with external-call detection |
 | `cfg` | Control-flow graph / basic-block construction for a function body (`c`, `cpp`, `rust`) |
+| `c_standard` | Best-effort lower bound on the C standard (C99/C11/C23) a file's syntax requires |
 | `fingerprint` | Structural hashing of function-like subtrees, for duplicate/clone detection across a corpus |
 | `regions` | `tools:off` / `tools:on` ignored-region markers |
 | `suppressions` | `tools:suppress TOOL:RULE` single-line suppression comments |
@@ -116,6 +117,11 @@ let imports = import_sources(&tree, source.as_bytes(), "rust");
 if let Some(cfg) = build_function_cfg(func_node, source, "rust") {
     println!("{} basic blocks", cfg.block_count());
 }
+
+// Best-effort lower bound on the C standard a file requires
+if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
+    println!("requires at least {standard:?}");
+}
 ```
 
 ## API
@@ -131,6 +137,7 @@ if let Some(cfg) = build_function_cfg(func_node, source, "rust") {
 - `import_sources` / `distinct_import_count` — import extraction (`imports`)
 - `call_edges` / `CallEdge` / `is_function_kind` / `get_function_name` — call-graph extraction (`calls`)
 - `build_function_cfg` / `FunctionCfg` / `BasicBlock` / `CfgEdge` — control-flow graphs (`cfg`)
+- `detect_min_c_standard` / `CStandard` — C standard lower-bound detection (`c_standard`)
 - `function_fingerprints` / `duplicate_groups` / `Fingerprint` / `CorpusFingerprint` — structural hashing (`fingerprint`)
 - `ignored_regions` / `IgnoredRegion` — `tools:off`/`tools:on` markers (`regions`)
 - `suppressions` / `Suppression` — `tools:suppress` comments (`suppressions`)

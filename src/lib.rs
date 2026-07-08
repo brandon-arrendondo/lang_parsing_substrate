@@ -1,3 +1,4 @@
+pub mod c_standard;
 pub mod calls;
 pub mod cfg;
 pub mod fingerprint;
@@ -8,6 +9,7 @@ pub mod regions;
 pub mod registry;
 pub mod suppressions;
 
+pub use c_standard::{detect_min_c_standard, CStandard};
 pub use calls::{call_edges, collect_local_names, get_function_name, is_function_kind, CallEdge};
 pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
 pub use fingerprint::{
