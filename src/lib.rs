@@ -1,6 +1,8 @@
 pub mod c_standard;
 pub mod calls;
 pub mod cfg;
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+pub mod cpp_header;
 pub mod fingerprint;
 pub mod imports;
 pub mod path_ignore;
@@ -12,6 +14,8 @@ pub mod suppressions;
 pub use c_standard::{detect_min_c_standard, CStandard};
 pub use calls::{call_edges, collect_local_names, get_function_name, is_function_kind, CallEdge};
 pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+pub use cpp_header::looks_like_cpp;
 pub use fingerprint::{
     duplicate_groups, function_fingerprints, structural_hash, CorpusFingerprint, Fingerprint,
 };
@@ -22,6 +26,8 @@ pub use query::{
     find_first_descendant, nearest_ancestor_of_kind, nearest_ancestor_of_kinds, node_text,
 };
 pub use regions::{ignored_regions, IgnoredRegion};
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+pub use registry::language_for_header_content;
 pub use registry::{
     is_parseable_extension, is_source_extension, language_for_file, language_for_key,
     language_info_for_file, languages, sloc_mode_for_file, supported_languages_report,

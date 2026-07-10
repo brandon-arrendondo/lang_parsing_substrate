@@ -9,14 +9,15 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 | Path | Purpose |
 |------|---------|
 | `src/lib.rs` | Crate root — module wiring, cfg-gated grammar re-exports (`pub use tree_sitter_*`) |
-| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `supported_languages_report()` |
+| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_for_header_content()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `supported_languages_report()` |
+| `src/cpp_header.rs` | `looks_like_cpp()` — best-effort content sniff for `.h` (C vs C++), gated on `lang-c` + `lang-cpp` |
 | `Cargo.toml` | 16 optional `lang-*` features + `all-languages` + `default = ["all-languages"]` |
 | `tasks.py` | `invoke build / test / check / bump-version / publish / clean` |
 | `todo.db` | Task tracking — run `todo-sqlite-cli list` to see open work |
 
 ## Key invariants
 
-- **`language_for_file` returns `Option<Language>`** — never a fallback. If a language feature is disabled, its extensions return `None`.
+- **`language_for_file` returns `Option<Language>`** — never a fallback. If a language feature is disabled, its extensions return `None`. It is extension-only (no I/O): `.h` always resolves to the C grammar regardless of content. Callers that already have the file's bytes and want best-effort C-vs-C++ disambiguation for `.h` should use `language_for_header_content(path, source)` instead (see `src/cpp_header.rs`) — it defers to `language_for_file` for every other extension and only overrides `.h` when the content contains an unambiguous C++-only construct.
 - **`languages()` is runtime-constructed** via `OnceLock<Vec<LanguageInfo>>`. It cannot be a `const` because its contents vary by compiled feature set. Do not attempt to make it `const`.
 - **Feature flags are the language gate** — every language is an optional Cargo dep. The `all-languages` feature enables all 16. Consumers use `default-features = false` to opt into a subset (e.g. tools_sqc only needs `lang-c,lang-cpp`).
 - **Grammar re-exports are cfg-gated** — `pub use tree_sitter_rust` is `#[cfg(feature = "lang-rust")]`. Consumers reach grammars transitively without their own direct deps.

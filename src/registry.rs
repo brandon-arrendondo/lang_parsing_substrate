@@ -260,6 +260,24 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
     }
 }
 
+/// Best-effort content-aware variant of [`language_for_file`] for callers
+/// that already have the file's bytes in hand (e.g. because they're about
+/// to parse it anyway). Identical to [`language_for_file`] for every
+/// extension except `.h`: a `.h` file is ambiguous between C and C++, and
+/// this checks `source` for an unambiguous C++-only construct
+/// ([`crate::looks_like_cpp`]) before falling back to `language_for_file`'s
+/// default of C. See that function's module docs for what counts as
+/// unambiguous and why a "no" doesn't mean "confirmed C".
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+pub fn language_for_header_content(path: &Path, source: &[u8]) -> Option<Language> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("h") if crate::cpp_header::looks_like_cpp(source) => {
+            Some(tree_sitter_cpp::LANGUAGE.into())
+        }
+        _ => language_for_file(path),
+    }
+}
+
 /// Returns the tree-sitter `Language` for the given canonical language key.
 ///
 /// The key is the [`LanguageInfo::key`] value defined by this registry — e.g.
