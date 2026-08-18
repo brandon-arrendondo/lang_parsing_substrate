@@ -19,6 +19,7 @@ pub enum SlocMode {
 
 /// A language the substrate can parse, with its display name, file extensions,
 /// and comment style.
+#[derive(Debug, Clone, Copy)]
 pub struct LanguageInfo {
     /// Human-facing name, e.g. "C++", "Ada".
     pub name: &'static str,

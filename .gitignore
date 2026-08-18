@@ -2,3 +2,5 @@
 Cargo.lock
 todo.db
 .todo-sqlite-cli
+__pycache__/
+*.pyc

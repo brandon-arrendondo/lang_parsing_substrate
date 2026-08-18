@@ -154,6 +154,40 @@ cargo test
 Requires no C compiler — tree-sitter grammar crates ship pre-generated C sources
 and compile via the `cc` crate.
 
+## Python bindings
+
+The `pyo3` Cargo feature (off by default) exposes the substrate's
+language-agnostic analysis primitives as a Python extension module, built
+with [maturin](https://www.maturin.rs/):
+
+```bash
+pip install maturin
+maturin build --release          # writes target/wheels/lang_parsing_substrate-*.whl
+pip install target/wheels/lang_parsing_substrate-*.whl
+```
+
+```python
+import lang_parsing_substrate as lps
+
+src = "fn helper(x: i32) -> i32 { x + 1 }\nfn main() { helper(41); }\n"
+edges = lps.call_edges("rust", src)          # [CallEdge(caller='main', callee='helper', ...)]
+cfg = lps.function_cfg("rust", src, "main")  # FunctionCfg | None
+fps = lps.function_fingerprints("rust", src, min_nodes=1)
+```
+
+Python can't hand this crate a `tree_sitter::Node`/`Tree` directly — this
+crate's `tree-sitter` version has no ABI relationship to tree-sitter's own,
+separate Python bindings — so every bound function takes `(language_key,
+source)`, parses internally, and returns owned data (`CallEdge`,
+`FunctionCfg`, `Fingerprint`, `Suppression`, `IgnoredRegion`, `LanguageInfo`,
+all plain attribute-holding classes). A consumer that also needs to walk the
+tree itself (e.g. for domain-specific semantics this crate doesn't model)
+still parses separately with a language-specific tree-sitter Python package;
+the bindings here only cover the substrate's own primitives.
+
+`invoke build-wheel` / `invoke publish-wheel` wrap the maturin build/publish
+steps, following the same dirty-tree/tag-match guard as `invoke publish`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

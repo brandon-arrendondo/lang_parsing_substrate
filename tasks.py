@@ -110,6 +110,15 @@ def test(c):
         "cargo test --no-default-features --features lang-c,lang-cpp",
         pty=True,
     )
+    import importlib.util
+
+    if importlib.util.find_spec("lang_parsing_substrate") is not None:
+        c.run("python3 -m pytest tests/python -q", pty=True)
+    else:
+        print(
+            "Skipping tests/python: lang_parsing_substrate not installed. "
+            "Run `invoke build-wheel && pip install target/wheels/*.whl` first."
+        )
 
 
 @task
@@ -145,6 +154,58 @@ def publish(c, dry_run=False):
     flag = " --dry-run" if dry_run else ""
     print(f"Publishing lang-parsing-substrate {version} to crates.io{' (dry run)' if dry_run else ''}...")
     c.run(f"cargo publish{flag}", pty=True)
+
+
+@task
+def build_wheel(c, release=True):
+    """Build the Python wheel (pyo3 bindings) via maturin.
+
+    Args:
+        release: Build in release mode (default: True — debug pyo3 builds
+            are slow enough at import time that it's rarely worth it).
+    """
+    cmd = "maturin build"
+    if release:
+        cmd += " --release"
+    c.run(cmd, pty=True)
+
+
+@task
+def publish_wheel(c, dry_run=False):
+    """Publish the Python wheel to PyPI via maturin.
+
+    Mirrors `publish`'s dirty-tree/tag-match guard so the crates.io release
+    and the PyPI wheel are always cut from the same tagged commit.
+
+    Args:
+        dry_run: Build the wheel but skip the upload step.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "status", "--porcelain"], capture_output=True, text=True
+    )
+    if result.stdout.strip():
+        raise SystemExit("Working tree is dirty — commit or stash changes before publishing.")
+
+    version = _read_cargo_version()
+    tag = f"v{version}"
+
+    result = subprocess.run(
+        ["git", "tag", "--points-at", "HEAD"], capture_output=True, text=True
+    )
+    tags = result.stdout.split()
+    if tag not in tags:
+        raise SystemExit(
+            f"HEAD is not tagged {tag} — run: git tag {tag} && git push origin {tag}"
+        )
+
+    print(f"Building lang-parsing-substrate {version} wheel...")
+    c.run("maturin build --release", pty=True)
+    if dry_run:
+        print("Dry run — skipping upload. Built wheel(s) are in target/wheels/.")
+        return
+    c.run("maturin publish --release", pty=True)
 
 
 @task

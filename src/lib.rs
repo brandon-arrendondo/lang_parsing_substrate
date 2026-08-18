@@ -6,6 +6,8 @@ pub mod cpp_header;
 pub mod fingerprint;
 pub mod imports;
 pub mod path_ignore;
+#[cfg(feature = "pyo3")]
+mod py;
 pub mod query;
 pub mod regions;
 pub mod registry;

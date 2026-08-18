@@ -1,6 +1,6 @@
 [package]
 name = "lang-parsing-substrate"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 authors = ["Brandon Arrendondo <brandon.arrendondo@bissell.com>"]
@@ -10,8 +10,14 @@ readme = "README.md"
 keywords = ["tree-sitter", "parsing", "language-detection", "static-analysis"]
 categories = ["parser-implementations", "development-tools"]
 
+[lib]
+# rlib keeps existing Rust consumers (knots, moldy, tools_sqc) unchanged; cdylib
+# is only exercised when maturin builds the `pyo3`-feature wheel.
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 tree-sitter = "0.25"
+pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 
 tree-sitter-ada                 = { version = "0.1",  optional = true }
 tree-sitter-c                   = { version = "0.24", optional = true }
@@ -48,6 +54,7 @@ lang-php        = ["dep:tree-sitter-php"]
 lang-fortran    = ["dep:tree-sitter-fortran"]
 lang-scala      = ["dep:tree-sitter-scala"]
 lang-lua        = ["dep:tree-sitter-lua"]
+pyo3            = ["dep:pyo3"]
 
 all-languages = [
     "lang-ada", "lang-c", "lang-cpp", "lang-rust", "lang-python",
