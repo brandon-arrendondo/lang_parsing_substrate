@@ -24,6 +24,16 @@ jobs:
   build:
     name: build (${{ matrix.platform.id }})
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      # Passed into the manylinux/musl Docker containers via `--env CFLAGS`
+      # below — same fix build.yml already carries for its own native
+      # cargo-test builds. _BSD_SOURCE enables le16toh/be16toh on glibc 2.17
+      # (manylinux2014 predates _DEFAULT_SOURCE). -std=c11 is what
+      # tree-sitter-fortran's parser.c actually needs: manylinux's aarch64
+      # cross-compiler defaults to C89 and rejects its C99 `for`-loop
+      # declarations — confirmed live (aarch64 build failure, x86_64 fine) on
+      # the first run of this workflow before this was added.
+      CFLAGS: -D_BSD_SOURCE -std=c11
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +65,12 @@ jobs:
           args: --release --out dist
           manylinux: ${{ matrix.platform.manylinux }}
           sccache: 'true'
+          # Inherit CFLAGS from the job-level env (see above). Passing by name
+          # (no =value) lets docker copy it from the runner's environment,
+          # avoiding shell-quoting issues with multi-word values. Only
+          # containerized (linux) builds use docker-options; macOS/Windows
+          # ignore it, but the env var is harmless there too.
+          docker-options: --env CFLAGS
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
