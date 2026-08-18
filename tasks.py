@@ -4,7 +4,9 @@ Invoke tasks for lang-parsing-substrate development.
 Usage:
     invoke check        # Run clippy and format check
     invoke build        # Build (debug by default; --release for release)
+    invoke build-wheel  # Build the pyo3 wheel locally (testing only — see docs/releasing.md)
     invoke test         # Run all tests
+    invoke publish      # Publish to crates.io (PyPI releases via git tag — see docs/releasing.md)
     invoke clean        # Remove build artifacts
     invoke bump-version # Bump version in Cargo.toml
 
@@ -158,7 +160,13 @@ def publish(c, dry_run=False):
 
 @task
 def build_wheel(c, release=True):
-    """Build the Python wheel (pyo3 bindings) via maturin.
+    """Build the Python wheel (pyo3 bindings) via maturin — LOCAL TESTING ONLY.
+
+    The real PyPI release path is `.github/workflows/wheels.yml`, triggered by
+    pushing a `vX.Y.Z` tag (see docs/releasing.md): it builds every platform's
+    wheel + an sdist and publishes via PyPI Trusted Publishing (OIDC), so no
+    API token is ever held locally. This task exists only to sanity-check that
+    the wheel builds and imports before cutting a release — it does not upload.
 
     Args:
         release: Build in release mode (default: True — debug pyo3 builds
@@ -168,44 +176,6 @@ def build_wheel(c, release=True):
     if release:
         cmd += " --release"
     c.run(cmd, pty=True)
-
-
-@task
-def publish_wheel(c, dry_run=False):
-    """Publish the Python wheel to PyPI via maturin.
-
-    Mirrors `publish`'s dirty-tree/tag-match guard so the crates.io release
-    and the PyPI wheel are always cut from the same tagged commit.
-
-    Args:
-        dry_run: Build the wheel but skip the upload step.
-    """
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "status", "--porcelain"], capture_output=True, text=True
-    )
-    if result.stdout.strip():
-        raise SystemExit("Working tree is dirty — commit or stash changes before publishing.")
-
-    version = _read_cargo_version()
-    tag = f"v{version}"
-
-    result = subprocess.run(
-        ["git", "tag", "--points-at", "HEAD"], capture_output=True, text=True
-    )
-    tags = result.stdout.split()
-    if tag not in tags:
-        raise SystemExit(
-            f"HEAD is not tagged {tag} — run: git tag {tag} && git push origin {tag}"
-        )
-
-    print(f"Building lang-parsing-substrate {version} wheel...")
-    c.run("maturin build --release", pty=True)
-    if dry_run:
-        print("Dry run — skipping upload. Built wheel(s) are in target/wheels/.")
-        return
-    c.run("maturin publish --release", pty=True)
 
 
 @task

@@ -1,0 +1,105 @@
+name: Wheels (PyPI)
+
+# Build per-platform abi3 wheels + an sdist for the `lang-parsing-substrate`
+# pyo3 bindings with maturin, and publish them to PyPI via Trusted Publishing
+# (OIDC, no API token) on a v*.*.* tag.
+#
+# abi3-py310 (see Cargo.toml's pyo3 dependency) means ONE wheel per platform
+# covers every CPython 3.10+, not one per minor version — no Python-version
+# axis needed in the build matrix, unlike a non-abi3 pyo3 crate would need.
+#
+# Validate the matrix without publishing by running this workflow manually
+# (Actions tab -> "Wheels (PyPI)" -> Run workflow); publish only happens on tags.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.platform.id }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # `id` must be unique per row — macOS and Linux share the bare
+          # x86_64/aarch64 target labels, which would otherwise collide as
+          # artifact names (upload-artifact@v4 rejects duplicate names).
+          - { id: linux-x86_64,  runner: ubuntu-22.04, target: x86_64, manylinux: auto }
+          - { id: linux-aarch64, runner: ubuntu-22.04, target: aarch64, manylinux: auto }
+          - { id: musl-x86_64,   runner: ubuntu-22.04, target: x86_64-unknown-linux-musl, manylinux: musllinux_1_2 }
+          - { id: musl-aarch64,  runner: ubuntu-22.04, target: aarch64-unknown-linux-musl, manylinux: musllinux_1_2 }
+          # Both macOS arches build on the Apple-Silicon runner; x86_64 is
+          # cross-compiled. Avoids the deprecated/scarce macos-13 Intel runners.
+          - { id: macos-x86_64,  runner: macos-14, target: x86_64-apple-darwin }
+          - { id: macos-aarch64, runner: macos-14, target: aarch64 }
+          - { id: windows-x64,   runner: windows-2022, target: x64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.platform.target }}
+          # No --features flag needed: pyproject.toml's [tool.maturin] already
+          # declares features = ["pyo3"], matching knots' own wheels.yml
+          # convention of letting pyproject.toml be the single source of the
+          # build's feature set.
+          args: --release --out dist
+          manylinux: ${{ matrix.platform.manylinux }}
+          sccache: 'true'
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.id }}
+          path: dist/*.whl
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, sdist]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: release
+    permissions:
+      id-token: write          # required for PyPI Trusted Publishing (OIDC)
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true   # flatten wheel-*/ and sdist/ into dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Idempotent re-runs: a version that partially published (e.g. one
+          # platform's wheel failed) skips the files already on PyPI on retry
+          # instead of erroring on "file already exists".
+          skip-existing: true

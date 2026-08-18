@@ -17,7 +17,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tree-sitter = "0.25"
-pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+# abi3-py310 builds ONE wheel per platform, forward-compatible with every
+# CPython 3.10+ — matching pyproject.toml's `requires-python` — rather than
+# maturin having to build (and CI having to matrix) one wheel per minor
+# Python version.
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"], optional = true }
 
 tree-sitter-ada                 = { version = "0.1",  optional = true }
 tree-sitter-c                   = { version = "0.24", optional = true }

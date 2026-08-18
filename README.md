@@ -62,17 +62,17 @@ the full set.
 A consumer that only cares about C/C++, for example, would declare:
 
 ```toml
-lang-parsing-substrate = { version = "0.4", default-features = false, features = ["lang-c", "lang-cpp"] }
+lang-parsing-substrate = { version = "0.5", default-features = false, features = ["lang-c", "lang-cpp"] }
 ```
 
 ## Usage
 
 ```toml
 # Cargo.toml — full language set (default)
-lang-parsing-substrate = "0.4"
+lang-parsing-substrate = "0.5"
 
 # Cargo.toml — C/C++ only
-lang-parsing-substrate = { version = "0.4", default-features = false, features = ["lang-c", "lang-cpp"] }
+lang-parsing-substrate = { version = "0.5", default-features = false, features = ["lang-c", "lang-cpp"] }
 ```
 
 ```rust
@@ -157,8 +157,15 @@ and compile via the `cc` crate.
 ## Python bindings
 
 The `pyo3` Cargo feature (off by default) exposes the substrate's
-language-agnostic analysis primitives as a Python extension module, built
-with [maturin](https://www.maturin.rs/):
+language-agnostic analysis primitives as a Python extension module, published
+to PyPI as prebuilt `abi3` wheels (CPython 3.10+, one wheel per platform —
+see `docs/releasing.md`):
+
+```bash
+pip install lang-parsing-substrate
+```
+
+Building it yourself from source uses [maturin](https://www.maturin.rs/):
 
 ```bash
 pip install maturin
@@ -185,8 +192,9 @@ tree itself (e.g. for domain-specific semantics this crate doesn't model)
 still parses separately with a language-specific tree-sitter Python package;
 the bindings here only cover the substrate's own primitives.
 
-`invoke build-wheel` / `invoke publish-wheel` wrap the maturin build/publish
-steps, following the same dirty-tree/tag-match guard as `invoke publish`.
+`invoke build-wheel` builds the wheel locally for testing. The actual PyPI
+release happens in CI on a `vX.Y.Z` tag push, via Trusted Publishing (OIDC,
+no API token) — see `docs/releasing.md`.
 
 ## License
 
