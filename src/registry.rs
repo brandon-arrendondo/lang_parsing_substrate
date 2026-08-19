@@ -1,3 +1,11 @@
+//! The language registry: `LANGUAGES`'s runtime form (`languages()`), and
+//! every lookup consumers use to get from a file to a tree-sitter `Language`
+//! — by extension (`language_for_file`), by sniffed `.h` content
+//! (`language_for_header_content`), or by registry key
+//! (`language_for_key`). Also the extension-classification predicates
+//! (`is_source_extension`, `is_parseable_extension`) that drive recursive
+//! file discovery in every consumer (knots, moldy, tools_sqc).
+
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Language;

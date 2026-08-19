@@ -31,8 +31,12 @@ use tree_sitter::Node;
 /// existing `external_calls` metric it extends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallEdge {
+    /// Name of the calling function.
     pub caller: String,
+    /// Name of the called function/macro.
     pub callee: String,
+    /// Whether `callee` is not locally defined in the same file — see the
+    /// struct-level docs for why this is per-file, not per-corpus.
     pub is_external: bool,
 }
 

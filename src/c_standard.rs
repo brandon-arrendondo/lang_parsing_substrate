@@ -36,10 +36,13 @@ use tree_sitter::{Node, Tree};
 /// standard than any individual marker implies" guarantee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CStandard {
+    /// No marker requiring a later standard was found.
     C99,
     /// Stands in for "C11 or C17" — C17 is a defect-fix release with no
     /// syntax of its own, so `tree-sitter-c` cannot distinguish the two.
     C11,
+    /// A C23-only syntax marker was found (e.g. `nullptr`, `constexpr`,
+    /// or a `[[...]]` attribute).
     C23,
 }
 

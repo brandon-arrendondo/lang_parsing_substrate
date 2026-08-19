@@ -55,13 +55,21 @@ use tree_sitter::Node;
 /// clone) and for ranking matches by how much code they actually cover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fingerprint {
+    /// The function's name, or `None` for an anonymous closure/lambda.
     pub name: Option<String>,
+    /// Tree-sitter node kind the subtree was rooted at.
     pub kind: &'static str,
+    /// Structural hash to group on for duplicate detection.
     pub hash: u64,
+    /// Number of AST nodes in the subtree.
     pub node_count: usize,
+    /// Start byte offset of the subtree in its source file.
     pub start_byte: usize,
+    /// End byte offset of the subtree in its source file.
     pub end_byte: usize,
+    /// 1-indexed start line of the subtree.
     pub start_line: usize,
+    /// 1-indexed end line of the subtree.
     pub end_line: usize,
 }
 
@@ -73,7 +81,9 @@ pub struct Fingerprint {
 /// boundary would be pure overhead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorpusFingerprint<S> {
+    /// The caller's identifier for this fingerprint's source file.
     pub source: S,
+    /// The fingerprint itself.
     pub fingerprint: Fingerprint,
 }
 

@@ -23,11 +23,13 @@
 
 use tree_sitter::Node;
 
+/// Index of a [`BasicBlock`] within a [`FunctionCfg`]'s `blocks` vector.
 pub type BlockId = usize;
 
 /// A single-entry, single-exit sequence of statements.
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
+    /// This block's index in the owning [`FunctionCfg`]'s `blocks` vector.
     pub id: BlockId,
     /// Byte ranges of the opaque statements appended to this block, in order.
     pub statements: Vec<(usize, usize)>,
@@ -38,26 +40,41 @@ pub struct BasicBlock {
     pub condition_range: Option<(usize, usize)>,
 }
 
+/// How control reaches one [`BasicBlock`] from another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfgEdge {
+    /// Falls through to the next block with no branch.
     Fallthrough,
+    /// Taken when a branch's condition evaluates true.
     TrueBranch,
+    /// Taken when a branch's condition evaluates false.
     FalseBranch,
+    /// A loop edge back to an earlier block (loop continuation).
     BackEdge,
+    /// Edge to the function's exit, from a `return` statement.
     Return,
+    /// Edge out of a loop, from a `break` statement.
     Break,
+    /// Edge back to a loop's condition/update, from a `continue` statement.
     Continue,
 }
 
+/// The control-flow graph for one function body.
 #[derive(Debug, Clone)]
 pub struct FunctionCfg {
+    /// Every basic block, indexed by [`BlockId`].
     pub blocks: Vec<BasicBlock>,
+    /// Edges as `(from, to, kind)` triples.
     pub edges: Vec<(BlockId, BlockId, CfgEdge)>,
+    /// The function's single entry block.
     pub entry: BlockId,
+    /// Blocks with no outgoing edge — every path the function can return
+    /// or fall off the end from.
     pub exits: Vec<BlockId>,
 }
 
 impl FunctionCfg {
+    /// Outgoing edges from block `id`, as `(target, edge kind)` pairs.
     pub fn successors(&self, id: BlockId) -> Vec<(BlockId, CfgEdge)> {
         self.edges
             .iter()
@@ -66,6 +83,7 @@ impl FunctionCfg {
             .collect()
     }
 
+    /// Incoming edges to block `id`, as `(source, edge kind)` pairs.
     pub fn predecessors(&self, id: BlockId) -> Vec<(BlockId, CfgEdge)> {
         self.edges
             .iter()
@@ -74,10 +92,12 @@ impl FunctionCfg {
             .collect()
     }
 
+    /// Total number of basic blocks in this function.
     pub fn block_count(&self) -> usize {
         self.blocks.len()
     }
 
+    /// The block at `id`, or `None` if out of range.
     pub fn get_block(&self, id: BlockId) -> Option<&BasicBlock> {
         self.blocks.get(id)
     }
