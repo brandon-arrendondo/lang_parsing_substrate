@@ -9,7 +9,7 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 | Path | Purpose |
 |------|---------|
 | `src/lib.rs` | Crate root — module wiring, cfg-gated grammar re-exports (`pub use tree_sitter_*`) |
-| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_for_header_content()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `supported_languages_report()` |
+| `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_for_header_content()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `is_extension_for_language`, `supported_languages_report()` |
 | `src/cpp_header.rs` | `looks_like_cpp()` — best-effort content sniff for `.h` (C vs C++), gated on `lang-c` + `lang-cpp` |
 | `Cargo.toml` | 16 optional `lang-*` features + `all-languages` + `default = ["all-languages"]` |
 | `tasks.py` | `invoke build / test / check / bump-version / publish / clean` |

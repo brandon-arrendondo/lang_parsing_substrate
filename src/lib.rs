@@ -42,9 +42,9 @@ pub use regions::{ignored_regions, IgnoredRegion};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub use registry::language_for_header_content;
 pub use registry::{
-    is_parseable_extension, is_source_extension, language_for_file, language_for_key,
-    language_info_for_file, languages, sloc_mode_for_file, supported_languages_report,
-    LanguageInfo, SlocMode,
+    is_extension_for_language, is_parseable_extension, is_source_extension, language_for_file,
+    language_for_key, language_info_for_file, languages, sloc_mode_for_file,
+    supported_languages_report, LanguageInfo, SlocMode,
 };
 pub use suppressions::{suppressions, Suppression};
 

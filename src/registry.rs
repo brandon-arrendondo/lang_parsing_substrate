@@ -385,13 +385,44 @@ pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
 
 /// Returns `true` if the substrate can parse files with `ext` — includes both
 /// recursive-discovery extensions and explicit-only ones (headers, fixed-form
-/// Fortran).
+/// Fortran), across *every* compiled-in language.
+///
+/// A consumer that only ever wants to discover files for one specific
+/// language (or a fixed set), and enables other `lang-*` features purely for
+/// narrow non-discovery use (e.g. [`crate::looks_like_cpp`]), should use
+/// [`is_extension_for_language`] instead — this function's result changes
+/// whenever the enabled feature set changes, which is rarely what a
+/// single-language consumer wants.
 pub fn is_parseable_extension(ext: &std::ffi::OsStr) -> bool {
     ext.to_str()
         .map(|e| {
             languages()
                 .iter()
                 .any(|l| l.extensions.contains(&e) || l.explicit_only.contains(&e))
+        })
+        .unwrap_or(false)
+}
+
+/// Returns `true` if `ext` is a recursive-discovery or explicit-only
+/// extension for the language keyed `key` specifically — unaffected by
+/// whatever *other* languages happen to be compiled in.
+///
+/// `is_parseable_extension`/`is_source_extension` check membership against
+/// the union of every compiled-in language, which silently widens for a
+/// consumer that enables a second `lang-*` feature for a narrow,
+/// non-discovery purpose (e.g. a disambiguation helper like
+/// [`crate::looks_like_cpp`]). A consumer doing single- or fixed-language
+/// file discovery should use this instead, checking against its own known
+/// key(s), so enabling another language's feature can never change what
+/// counts as "my source files". Returns `false` if `key` is unknown or its
+/// feature was not compiled in.
+pub fn is_extension_for_language(ext: &std::ffi::OsStr, key: &str) -> bool {
+    ext.to_str()
+        .map(|e| {
+            languages()
+                .iter()
+                .find(|l| l.key == key)
+                .is_some_and(|l| l.extensions.contains(&e) || l.explicit_only.contains(&e))
         })
         .unwrap_or(false)
 }
@@ -557,6 +588,38 @@ mod tests {
         }
         assert!(!is_source_extension(std::ffi::OsStr::new("txt")));
         assert!(!is_parseable_extension(std::ffi::OsStr::new("txt")));
+    }
+
+    /// `is_extension_for_language` must only report `true` for the given
+    /// language's own extensions, regardless of what else is compiled in —
+    /// this is the guard against the footgun `is_parseable_extension`
+    /// widening file discovery when an unrelated `lang-*` feature is enabled
+    /// for a narrow, non-discovery purpose.
+    #[test]
+    fn is_extension_for_language_is_scoped_to_one_language() {
+        for lang in languages() {
+            for ext in lang.extensions.iter().chain(lang.explicit_only) {
+                let os_ext = std::ffi::OsStr::new(ext);
+                assert!(
+                    is_extension_for_language(os_ext, lang.key),
+                    ".{ext} should be an extension of {}",
+                    lang.key
+                );
+                for other in languages().iter().filter(|l| l.key != lang.key) {
+                    assert!(
+                        !is_extension_for_language(os_ext, other.key),
+                        ".{ext} (belongs to {}) must not be reported as an extension of {}",
+                        lang.key,
+                        other.key
+                    );
+                }
+            }
+        }
+        assert!(!is_extension_for_language(std::ffi::OsStr::new("txt"), "c"));
+        assert!(!is_extension_for_language(
+            std::ffi::OsStr::new("c"),
+            "not-a-real-key"
+        ));
     }
 
     /// `language_for_key` must round-trip with `LanguageInfo.key` for every
