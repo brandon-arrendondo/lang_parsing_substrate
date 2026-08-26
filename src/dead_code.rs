@@ -357,7 +357,11 @@ fn parse_defined(s: &str) -> Option<(&str, &str)> {
 }
 
 fn is_zero_condition(rest: &str) -> bool {
-    strip_trailing_comment(rest).trim() == "0"
+    let stripped: String = strip_trailing_comment(rest)
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
+        .collect();
+    stripped == "0"
 }
 
 fn strip_trailing_comment(s: &str) -> &str {
@@ -441,6 +445,12 @@ mod tests {
     #[test]
     fn if_zero_with_trailing_comment() {
         let src = "#if 0 // disabled\nx();\n#endif\n";
+        assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn if_parenthesized_zero_is_dead() {
+        let src = "#if (0)\nx();\n#endif\n";
         assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
     }
 
