@@ -47,14 +47,20 @@
 //! sidesteps that entirely, the same way [`crate::suppressions`] and
 //! [`crate::regions`] do.
 //!
-//! `#define`/`#undef` tracking is intentionally scoped to lines with no
-//! enclosing `#if`/`#ifdef`/`#ifndef` at all (preprocessor-conditional
-//! nesting depth zero) — not C brace/scope nesting, which `#define` doesn't
-//! respect anyway. A function-local `#define` (legal in C, and exactly what
-//! motivated sub-problem 2 — see the doc) still counts, since it isn't
-//! wrapped in any conditional; a `#define` inside a live branch of some
-//! *other* conditional does not, keeping the "unconditional" claim honest
-//! without needing brace-awareness.
+//! `#define`/`#undef` tracking counts a directive as long as it isn't inside
+//! a branch this scanner has already proven dead — not C brace/scope
+//! nesting, which `#define` doesn't respect anyway. This deliberately
+//! includes a `#define` nested inside an *unproven* (`Neutral`) branch of
+//! some other conditional: the scanner already treats such a branch as live
+//! for every other purpose (it can't prove otherwise), so treating its
+//! `#define` as having executed is the same assumption applied
+//! consistently. This matters in practice — real source commonly wraps an
+//! entire file in a single top-level module guard (`#if SUPPORT_MODULE_X`)
+//! that this scanner can't prove one way or the other, and requiring literal
+//! preprocessor-nesting depth zero would make every `#define` inside such a
+//! file invisible to sub-problem 2, silently disabling it for exactly the
+//! files it's meant to help. A `#define` inside a branch already proven dead
+//! does not count — that code never executes, so nothing was "defined".
 
 use std::collections::{HashMap, HashSet};
 
@@ -175,12 +181,12 @@ pub fn dead_code_ranges(source: &str) -> Vec<DeadCodeRegion> {
                     }
                 }
             }
-            "define" if stack.is_empty() => {
+            "define" if dead_start.is_none() => {
                 if let Some(name) = first_ident(rest) {
                     defined.insert(name.to_string(), true);
                 }
             }
-            "undef" if stack.is_empty() => {
+            "undef" if dead_start.is_none() => {
                 if let Some(name) = first_ident(rest) {
                     defined.insert(name.to_string(), false);
                 }
@@ -549,11 +555,48 @@ mod tests {
     }
 
     #[test]
-    fn define_inside_conditional_does_not_count_as_unconditional() {
-        // FOO is only #define'd inside a (live) #ifndef BAR branch, so it's
-        // never provably unconditional — no region should be reported.
-        let src = "#ifndef BAR\n#define FOO\n#endif\n#ifdef FOO\nx();\n#endif\n";
-        assert!(ranges(src).is_empty());
+    fn define_inside_dead_branch_does_not_count() {
+        // FOO is only #define'd inside a *proven-dead* `#if 0` branch, which
+        // never executes — it must not be treated as having defined FOO.
+        // Line 2 (the #define itself) is legitimately dead as part of the
+        // `#if 0` block; the later `#ifdef FOO` block (lines 4-6) must NOT
+        // additionally be reported as dead just because it saw the #define.
+        let src = "#if 0\n#define FOO\n#endif\n#ifdef FOO\nx();\n#endif\n";
+        assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn define_inside_unproven_branch_still_counts() {
+        // FOO is #define'd inside an *unproven* (`Neutral`) `#ifndef BAR`
+        // branch — this scanner can't prove BAR either way, so it already
+        // treats that branch as live everywhere else; the #define should be
+        // trusted the same way. Task 540/560's raylib case is exactly this
+        // shape one level up: the whole file wrapped in an unprovable
+        // `#if SUPPORT_MODULE_X` guard.
+        let src = "#ifndef BAR\n#define FOO\n#endif\n\
+                   #ifdef FOO\nlive();\n#else\ndead();\n#endif\n";
+        assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    // Raylib rtext.c's actual shape (task 560 follow-up): the whole file is
+    // wrapped in a single top-level `#if SUPPORT_MODULE_RTEXT` module guard
+    // this scanner can't prove either way, so the unconditional #define
+    // inside it sits at preprocessor-nesting depth 1, not 0.
+    #[test]
+    fn always_defined_macro_under_unprovable_module_guard_else_is_dead() {
+        let src = concat!(
+            "#if SUPPORT_MODULE_RTEXT\n",                   // 1
+            "#define SUPPORT_COMPRESSED_FONT_ATLAS\n",      // 2
+            "void f(void) {\n",                             // 3
+            "#if defined(SUPPORT_COMPRESSED_FONT_ATLAS)\n", // 4
+            "    live_call();\n",                           // 5
+            "#else\n",                                      // 6
+            "    sprintf(buf, \"%d\", n);\n",               // 7
+            "#endif\n",                                     // 8
+            "}\n",                                          // 9
+            "#endif\n",                                     // 10
+        );
+        assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
     }
 
     #[test]
