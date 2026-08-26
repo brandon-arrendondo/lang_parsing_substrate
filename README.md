@@ -19,6 +19,9 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | `fingerprint` | Structural hashing of function-like subtrees, for duplicate/clone detection across a corpus |
 | `regions` | `tools:off` / `tools:on` ignored-region markers |
 | `suppressions` | `tools:suppress TOOL:RULE` single-line suppression comments |
+| `dead_code` | Preprocessor dead-code regions for C/C++ (`#if 0`, `__cplusplus`-gated branches, locally-provable macro definedness) |
+| `dead_code_swift` | Dead-code regions for Swift's `#if`/`#elseif`/`#else` conditional compilation (compile-time-constant boolean conditions only — see module docs for why the C/C++ macro-definedness sub-problem doesn't apply to Swift) |
+| `dead_code_csharp` | Dead-code regions for C#'s `#if`/`#elif`/`#else` conditional compilation — AST-based like `dead_code_swift`, but ports both C/C++ sub-problems (constant conditions and locally-provable `#define`/`#undef` symbol definedness) since C# has real nested preprocessor nodes and real `#define` |
 | `path_ignore` | Compiled glob ignore-pattern sets for path filtering |
 
 Everything below the registry is deliberately per-file: a module extracts what
@@ -141,6 +144,9 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `function_fingerprints` / `duplicate_groups` / `Fingerprint` / `CorpusFingerprint` — structural hashing (`fingerprint`)
 - `ignored_regions` / `IgnoredRegion` — `tools:off`/`tools:on` markers (`regions`)
 - `suppressions` / `Suppression` — `tools:suppress` comments (`suppressions`)
+- `dead_code_ranges` / `DeadCodeRegion` / `DeadCodeReason` — preprocessor dead-code regions, C/C++ only (`dead_code`)
+- `swift_dead_code_regions` / `SwiftDeadCodeRegion` — Swift `#if`/`#elseif`/`#else` dead-code regions (`dead_code_swift`)
+- `csharp_dead_code_regions` / `CSharpDeadCodeRegion` — C# `#if`/`#elif`/`#else` dead-code regions (`dead_code_csharp`)
 - `PathIgnore` — compiled glob ignore sets (`path_ignore`)
 
 ## Building

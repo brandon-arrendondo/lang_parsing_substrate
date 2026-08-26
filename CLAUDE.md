@@ -11,6 +11,9 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 | `src/lib.rs` | Crate root — module wiring, cfg-gated grammar re-exports (`pub use tree_sitter_*`) |
 | `src/registry.rs` | `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file()`, `language_for_header_content()`, `language_info_for_file()`, `sloc_mode_for_file()`, `is_source_extension`, `is_parseable_extension`, `is_extension_for_language`, `supported_languages_report()` |
 | `src/cpp_header.rs` | `looks_like_cpp()` — best-effort content sniff for `.h` (C vs C++), gated on `lang-c` + `lang-cpp` |
+| `src/dead_code.rs` | `dead_code_ranges()` — line-based preprocessor dead-code region detection for C/C++ (`#if 0`, `__cplusplus`-gated branches, locally-provable macro definedness), gated on `lang-c` OR `lang-cpp`; see `DETECT_DEAD_CODE_REGIONS.md` for the design handoff |
+| `src/dead_code_swift.rs` | `swift_dead_code_regions()` — tree-sitter-based (not line-based) dead-code detection for Swift's `#if`/`#elseif`/`#else`, gated on `lang-swift`; narrower scope than the C/C++ module — Swift has no `#define`, so only compile-time-constant boolean conditions (`#if false`, etc.) are locally provable, see module docs |
+| `src/dead_code_csharp.rs` | `csharp_dead_code_regions()` — tree-sitter-based dead-code detection for C#'s `#if`/`#elif`/`#else`, gated on `lang-csharp`; ports both C/C++ sub-problems (unlike Swift) since C# has real nested `preproc_if` nodes and real `#define`/`#undef` — see module docs |
 | `Cargo.toml` | 16 optional `lang-*` features + `all-languages` + `default = ["all-languages"]` |
 | `tasks.py` | `invoke build / test / check / bump-version / publish / clean` |
 | `todo.db` | Task tracking — run `todo-sqlite-cli list` to see open work |

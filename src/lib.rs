@@ -14,6 +14,12 @@ pub mod calls;
 pub mod cfg;
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub mod cpp_header;
+#[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]
+pub mod dead_code;
+#[cfg(feature = "lang-csharp")]
+pub mod dead_code_csharp;
+#[cfg(feature = "lang-swift")]
+pub mod dead_code_swift;
 pub mod fingerprint;
 pub mod imports;
 pub mod path_ignore;
@@ -29,6 +35,12 @@ pub use calls::{call_edges, collect_local_names, get_function_name, is_function_
 pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub use cpp_header::looks_like_cpp;
+#[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]
+pub use dead_code::{dead_code_ranges, DeadCodeReason, DeadCodeRegion};
+#[cfg(feature = "lang-csharp")]
+pub use dead_code_csharp::{csharp_dead_code_regions, CSharpDeadCodeRegion};
+#[cfg(feature = "lang-swift")]
+pub use dead_code_swift::{swift_dead_code_regions, SwiftDeadCodeRegion};
 pub use fingerprint::{
     duplicate_groups, function_fingerprints, structural_hash, CorpusFingerprint, Fingerprint,
 };
