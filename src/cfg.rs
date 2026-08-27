@@ -600,6 +600,7 @@ mod tests {
         search(node, kind).unwrap_or_else(|| panic!("no {kind} node found"))
     }
 
+    #[cfg(feature = "lang-c")]
     fn c_cfg(source: &str) -> FunctionCfg {
         let tree = parse(source, tree_sitter_c::LANGUAGE.into());
         let bytes = source.as_bytes();
@@ -639,6 +640,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_straight_line_is_a_single_block() {
         let cfg = c_cfg("int f(void) { int x = 1; int y = 2; }");
         assert_eq!(cfg.block_count(), 1);
@@ -647,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_if_else_has_true_false_and_fallthrough_join() {
         let cfg = c_cfg("int f(int x) { if (x) { x = 1; } else { x = 2; } }");
         let kinds = edge_kinds(&cfg);
@@ -659,6 +662,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_if_without_else_still_joins() {
         let cfg = c_cfg("int f(int x) { if (x) { x = 1; } x = 2; }");
         let kinds = edge_kinds(&cfg);
@@ -667,6 +671,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_return_in_branch_does_not_join() {
         // The true branch returns, so it must NOT get a Fallthrough edge
         // into the join block — only the false branch does.
@@ -680,6 +685,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_while_with_break_and_backedge() {
         let cfg = c_cfg("int f(int x) { while (x) { if (x) { break; } x = x - 1; } }");
         let kinds = edge_kinds(&cfg);
@@ -689,6 +695,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_for_loop_has_condition_and_backedge() {
         let cfg = c_cfg("int f(void) { for (int i = 0; i < 10; i = i + 1) { continue; } }");
         let kinds = edge_kinds(&cfg);
@@ -698,6 +705,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_do_while_body_runs_before_condition_check() {
         let cfg = c_cfg("int f(int x) { do { x = x - 1; } while (x); }");
         let kinds = edge_kinds(&cfg);
@@ -706,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_nested_compound_statement_flattens() {
         // A bare `{ }` scoping block should not create extra branch edges.
         let cfg = c_cfg("int f(void) { { int x = 1; } { int y = 2; } }");
@@ -726,6 +735,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_deeply_nested_if_chain_does_not_overflow_the_stack() {
         // Regression: the pre-iterative CfgBuilder::visit recursed once per
         // nesting level. A real caller (knots) hit this via a syntactically

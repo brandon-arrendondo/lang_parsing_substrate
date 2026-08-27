@@ -22,6 +22,8 @@ pub mod dead_code_csharp;
 pub mod dead_code_swift;
 pub mod fingerprint;
 pub mod imports;
+#[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
+pub mod isr;
 pub mod path_ignore;
 #[cfg(feature = "pyo3")]
 mod py;
@@ -45,6 +47,8 @@ pub use fingerprint::{
     duplicate_groups, function_fingerprints, structural_hash, CorpusFingerprint, Fingerprint,
 };
 pub use imports::{distinct_import_count, import_sources};
+#[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
+pub use isr::{interrupt_handlers, InterruptEvidence, InterruptHandler};
 pub use path_ignore::PathIgnore;
 pub use query::{
     find_ancestor, find_descendants, find_descendants_of_kind, find_descendants_of_kinds,

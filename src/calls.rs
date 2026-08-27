@@ -758,6 +758,7 @@ mod tests {
     /// itself, producing a false self-recursion edge that doesn't exist in
     /// the source.
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_ifdef_spanning_brace_does_not_leak_swallowed_sibling_calls() {
         let code = r#"int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
   int rc;
@@ -1060,6 +1061,7 @@ int sqlite3Init(sqlite3 *db, char **pzErrMsg){
     /// dropping the real call to valueFromFunction that lives textually
     /// inside it.
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_mis_parsed_if_does_not_lose_real_calls() {
         let code = r#"static int valueFromExpr(
   sqlite3 *db,                    /* The database connection */
@@ -1245,6 +1247,7 @@ no_mem:
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_resolves_fn_ptr_alias() {
         // Juliet variant 65a pattern: function pointer assigned to a sink
         // function, then invoked via the pointer. The call graph should
@@ -1268,6 +1271,7 @@ no_mem:
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_resolves_fn_ptr_address_of() {
         // Initializer uses the address-of form `&target`, exercising the
         // unary-argument unwrap in rhs_target_function_name.
@@ -1285,6 +1289,7 @@ no_mem:
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn c_plain_pointer_not_aliased() {
         // A plain pointer assignment `int *p = &x;` is not a function
         // pointer -- make sure we don't pollute the call graph with `x`
