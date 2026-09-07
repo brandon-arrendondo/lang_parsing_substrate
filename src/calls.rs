@@ -14,7 +14,7 @@
 //! cross-file call graph (deciding which external callee belongs to which
 //! other file) is a per-tool concern, same as `import_sources`.
 
-use crate::query::find_first_descendant;
+use crate::query::{find_first_descendant, push_children_reversed};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -78,15 +78,23 @@ pub fn call_edges(root: Node, source: &str) -> Vec<CallEdge> {
     edges
 }
 
-fn collect_functions<'a>(node: Node<'a>, source: &str, out: &mut Vec<(Node<'a>, String)>) {
-    if is_function_kind(node.kind()) && !is_macro_function_definition(node) {
-        if let Some(name) = get_function_name(node, source) {
-            out.push((node, name));
+/// Collects every named function-like node in `root`'s subtree, in pre-order.
+///
+/// Iterative (explicit worklist), not recursive, for the reason
+/// [`crate::query::find_descendants`] documents: this walk's depth is the
+/// AST's own nesting depth, which is unbounded — a corrupted-`#ifdef` parse
+/// reaches thousands of levels — and it runs on worker threads whose stacks
+/// are far smaller than main's. Children are pushed reversed and popped LIFO,
+/// so the visit order is the same pre-order the recursion produced.
+fn collect_functions<'a>(root: Node<'a>, source: &str, out: &mut Vec<(Node<'a>, String)>) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if is_function_kind(node.kind()) && !is_macro_function_definition(node) {
+            if let Some(name) = get_function_name(node, source) {
+                out.push((node, name));
+            }
         }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_functions(child, source, out);
+        push_children_reversed(node, &mut stack);
     }
 }
 
@@ -343,25 +351,26 @@ fn get_name_from_assignment_context(node: Node, source: &str) -> Option<String> 
 /// Used to classify call sites as local vs. external.
 pub fn collect_local_names(root: Node, source: &str) -> HashSet<String> {
     let mut names = HashSet::new();
-    collect_local_names_recursive(root, source, &mut names);
+    collect_local_names_into(root, source, &mut names);
     names
 }
 
-fn collect_local_names_recursive(node: Node, source: &str, names: &mut HashSet<String>) {
-    if is_function_kind(node.kind()) {
-        if let Some(name) = get_function_name(node, source) {
-            names.insert(name);
-        }
-    } else if matches!(node.kind(), "preproc_def" | "preproc_function_def") {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
-                names.insert(name.to_string());
+/// Iterative for the reason [`collect_functions`] documents.
+fn collect_local_names_into(root: Node, source: &str, names: &mut HashSet<String>) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if is_function_kind(node.kind()) {
+            if let Some(name) = get_function_name(node, source) {
+                names.insert(name);
+            }
+        } else if matches!(node.kind(), "preproc_def" | "preproc_function_def") {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                    names.insert(name.to_string());
+                }
             }
         }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_local_names_recursive(child, source, names);
+        push_children_reversed(node, &mut stack);
     }
 }
 
@@ -401,13 +410,13 @@ fn handle_call_node(
     }
 }
 
-/// Collects every call target name reachable from `node`, recursing through
+/// Collects every call target name reachable from `root`, descending through
 /// nested function bodies (a nested closure's calls are attributed to every
 /// enclosing named function, not just its own) — matching the traversal the
 /// `external_calls` metric already uses.
 ///
 /// `stop_at_nested`: when true, does not descend into a nested function-like
-/// node (see [`is_function_kind`]). Callers set this when `node.has_error()`
+/// node (see [`is_function_kind`]). Callers set this when `root.has_error()`
 /// — a syntax error anywhere in the subtree means the span can't be trusted,
 /// and for grammars where a function-like node can never legitimately nest
 /// inside another of the same call-graph role (e.g. C's `function_definition`
@@ -416,67 +425,74 @@ fn handle_call_node(
 /// sibling's calls to the outer, corrupted caller would be wrong, so the walk
 /// stops at the boundary instead and lets the nested node be counted (in a
 /// separate, correctly-scoped pass) under its own name.
+///
+/// Iterative for the reason [`collect_functions`] documents — and the more
+/// pressing case of it, since the corrupted parses that set `stop_at_nested`
+/// are exactly the deeply nested ones.
 fn collect_call_names(
-    node: Node,
+    root: Node,
     source: &str,
     stop_at_nested: bool,
     aliases: &HashMap<String, String>,
     out: &mut Vec<String>,
 ) {
-    if node.kind() == "call_expression"
-        || node.kind() == "call"
-        || node.kind() == "invocation_expression"
-    {
-        handle_call_node(node, source, aliases, out);
-    }
-    if node.kind() == "procedure_call_statement" || node.kind() == "function_call" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    if node.kind() == "method_invocation" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    if node.kind() == "call_expression" && node.child_by_field_name("function").is_none() {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if !child.is_named() {
-                continue;
-            }
-            if matches!(
-                child.kind(),
-                "value_arguments" | "type_arguments" | "annotated_lambda" | "call_suffix"
-            ) {
-                continue;
-            }
-            let text = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-            out.push(text);
-            break;
-        }
-    }
-    if node.kind() == "object_creation_expression" {
-        if let Some(type_node) = node.child_by_field_name("type") {
-            if let Ok(name) = type_node.utf8_text(source.as_bytes()) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if stop_at_nested
-            && is_function_kind(child.kind())
-            && !is_macro_function_definition(child)
-            && !is_error_recovery_debris(child, source)
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call_expression"
+            || node.kind() == "call"
+            || node.kind() == "invocation_expression"
         {
-            continue;
+            handle_call_node(node, source, aliases, out);
         }
-        collect_call_names(child, source, stop_at_nested, aliases, out);
+        if node.kind() == "procedure_call_statement" || node.kind() == "function_call" {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        if node.kind() == "method_invocation" {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        if node.kind() == "call_expression" && node.child_by_field_name("function").is_none() {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if !child.is_named() {
+                    continue;
+                }
+                if matches!(
+                    child.kind(),
+                    "value_arguments" | "type_arguments" | "annotated_lambda" | "call_suffix"
+                ) {
+                    continue;
+                }
+                let text = child.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                out.push(text);
+                break;
+            }
+        }
+        if node.kind() == "object_creation_expression" {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                if let Ok(name) = type_node.utf8_text(source.as_bytes()) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node
+            .children(&mut cursor)
+            .filter(|child| {
+                !(stop_at_nested
+                    && is_function_kind(child.kind())
+                    && !is_macro_function_definition(*child)
+                    && !is_error_recovery_debris(*child, source))
+            })
+            .collect();
+        stack.extend(children.into_iter().rev());
     }
 }
 
@@ -527,53 +543,57 @@ fn is_c_keyword(name: &str) -> bool {
 /// grammar family — this simply never matches in other languages' trees, so
 /// no explicit language gate is needed (same principle as the rest of this
 /// module's node-kind dispatch).
-fn collect_fn_ptr_aliases(node: Node, source: &str, aliases: &mut HashMap<String, String>) {
-    match node.kind() {
-        "declaration" => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() != "init_declarator" {
-                    continue;
-                }
-                let Some(decl) = child.child_by_field_name("declarator") else {
-                    continue;
-                };
-                if !declarator_is_function_pointer(decl) {
-                    continue;
-                }
-                let Some(name) = extract_innermost_identifier(decl, source) else {
-                    continue;
-                };
-                if let Some(value) = child.child_by_field_name("value") {
-                    if let Some(target) = rhs_target_function_name(value, source) {
-                        aliases.insert(name, target);
+///
+/// Iterative for the reason [`collect_functions`] documents. Pre-order is
+/// what makes a later rebinding assignment overwrite an earlier one, so the
+/// LIFO worklist has to preserve it.
+fn collect_fn_ptr_aliases(root: Node, source: &str, aliases: &mut HashMap<String, String>) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "declaration" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() != "init_declarator" {
+                        continue;
+                    }
+                    let Some(decl) = child.child_by_field_name("declarator") else {
+                        continue;
+                    };
+                    if !declarator_is_function_pointer(decl) {
+                        continue;
+                    }
+                    let Some(name) = extract_innermost_identifier(decl, source) else {
+                        continue;
+                    };
+                    if let Some(value) = child.child_by_field_name("value") {
+                        if let Some(target) = rhs_target_function_name(value, source) {
+                            aliases.insert(name, target);
+                        }
                     }
                 }
             }
-        }
-        "assignment_expression" => {
-            // Rebind an existing function-pointer alias. Only applies when the
-            // LHS is already known to be a function pointer.
-            if let (Some(lhs), Some(rhs)) = (
-                node.child_by_field_name("left"),
-                node.child_by_field_name("right"),
-            ) {
-                if lhs.kind() == "identifier" {
-                    if let Ok(lhs_name) = lhs.utf8_text(source.as_bytes()) {
-                        if aliases.contains_key(lhs_name) {
-                            if let Some(target) = rhs_target_function_name(rhs, source) {
-                                aliases.insert(lhs_name.to_string(), target);
+            "assignment_expression" => {
+                // Rebind an existing function-pointer alias. Only applies when the
+                // LHS is already known to be a function pointer.
+                if let (Some(lhs), Some(rhs)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) {
+                    if lhs.kind() == "identifier" {
+                        if let Ok(lhs_name) = lhs.utf8_text(source.as_bytes()) {
+                            if aliases.contains_key(lhs_name) {
+                                if let Some(target) = rhs_target_function_name(rhs, source) {
+                                    aliases.insert(lhs_name.to_string(), target);
+                                }
                             }
                         }
                     }
                 }
             }
+            _ => {}
         }
-        _ => {}
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_fn_ptr_aliases(child, source, aliases);
+        push_children_reversed(node, &mut stack);
     }
 }
 
@@ -720,6 +740,38 @@ mod tests {
         assert!(e
             .iter()
             .any(|c| c.caller == "main" && c.callee == "println" && c.is_external));
+    }
+
+    #[cfg(feature = "lang-c")]
+    #[test]
+    fn deeply_nested_input_does_not_overflow_the_stack() {
+        // Regression: every walk in this module descends to the AST's own
+        // nesting depth, and prescan runs them on rayon workers whose stacks
+        // are far smaller than main's. A corrupted-#ifdef parse of raylib
+        // reached thousands of levels while a sibling recursive walk in a
+        // consumer overflowed on the same tree; the margin here was
+        // accidental, not designed. 20k levels is well past what a recursive
+        // walk of this shape survives.
+        //
+        // Exercises all four walks at once: call_edges runs collect_local_names,
+        // collect_functions, collect_fn_ptr_aliases and collect_call_names over
+        // the same deep tree.
+        let depth = 20_000;
+        let mut code = String::from("void helper(void) {}\nvoid f(int x) {\n");
+        for _ in 0..depth {
+            code.push_str("if (x) {\n");
+        }
+        code.push_str("helper();\n");
+        for _ in 0..depth {
+            code.push_str("}\n");
+        }
+        code.push_str("}\n");
+        let e = edges("c", &code);
+        assert!(e.contains(&CallEdge {
+            caller: "f".into(),
+            callee: "helper".into(),
+            is_external: false,
+        }));
     }
 
     #[cfg(feature = "lang-c")]

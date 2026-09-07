@@ -55,7 +55,11 @@ pub fn find_descendants<'a>(root: Node<'a>, predicate: impl Fn(Node<'a>) -> bool
 /// Pushes `node`'s children onto `stack` in reverse order, so popping the
 /// stack (LIFO) visits them in original left-to-right order — preserving
 /// the same pre-order sequence a recursive descent would produce.
-fn push_children_reversed<'a>(node: Node<'a>, stack: &mut Vec<Node<'a>>) {
+///
+/// Shared with [`crate::calls`], whose walks carry the same
+/// depth-tied-to-AST-nesting hazard this module's searches were made
+/// iterative to avoid.
+pub(crate) fn push_children_reversed<'a>(node: Node<'a>, stack: &mut Vec<Node<'a>>) {
     let mut cursor = node.walk();
     let children: Vec<Node<'a>> = node.children(&mut cursor).collect();
     stack.extend(children.into_iter().rev());
