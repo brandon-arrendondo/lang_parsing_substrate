@@ -486,10 +486,10 @@ fn collect_call_names(
         let children: Vec<Node> = node
             .children(&mut cursor)
             .filter(|child| {
-                !(stop_at_nested
-                    && is_function_kind(child.kind())
-                    && !is_macro_function_definition(*child)
-                    && !is_error_recovery_debris(*child, source))
+                !stop_at_nested
+                    || !is_function_kind(child.kind())
+                    || is_macro_function_definition(*child)
+                    || is_error_recovery_debris(*child, source)
             })
             .collect();
         stack.extend(children.into_iter().rev());

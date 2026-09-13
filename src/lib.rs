@@ -38,7 +38,10 @@ pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub use cpp_header::looks_like_cpp;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]
-pub use dead_code::{dead_code_ranges, DeadCodeReason, DeadCodeRegion};
+pub use dead_code::{
+    dead_code_ranges, dead_code_ranges_with_assumptions, posix_default_assumptions, DeadCodeReason,
+    DeadCodeRegion, PlatformAssumptions,
+};
 #[cfg(feature = "lang-csharp")]
 pub use dead_code_csharp::{csharp_dead_code_regions, CSharpDeadCodeRegion};
 #[cfg(feature = "lang-swift")]

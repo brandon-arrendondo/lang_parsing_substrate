@@ -80,12 +80,18 @@ pub enum DeadCodeReason {
     CppOnly,
     /// The macro is unconditionally `#define`d earlier in the file with no
     /// later `#undef`, so the `#ifdef`/`#if defined(MACRO)` branch is always
-    /// live and its `#else` is dead.
+    /// live and its `#else` is dead. Also produced, under
+    /// [`dead_code_ranges_with_assumptions`], when the macro has no local
+    /// `#define`/`#undef` of its own but the caller's [`PlatformAssumptions`]
+    /// asserts it defined.
     AlwaysDefined,
     /// The macro is never validly `#define`d in scope at this point — either
     /// not mentioned at all except as a commented-out `#define`, or
     /// unconditionally `#undef`d with no later `#define` — so the
-    /// `#ifdef`/`#if defined(MACRO)` branch itself is dead.
+    /// `#ifdef`/`#if defined(MACRO)` branch itself is dead. Also produced,
+    /// under [`dead_code_ranges_with_assumptions`], when the macro has no
+    /// local `#define`/`#undef` of its own but the caller's
+    /// [`PlatformAssumptions`] asserts it undefined.
     NeverDefined,
 }
 
@@ -122,11 +128,72 @@ struct Frame {
     self_caused: bool,
 }
 
+/// Assumed defined/undefined state for macros this file will never itself
+/// settle — typically compiler- or build-system-predefined platform flags
+/// (`_MSC_VER`, `_WIN32`, `__APPLE__`, `__vxworks`, ...) that no portable
+/// source file `#define`s or `#undef`s itself. Distinct from the
+/// locally-inferred `#define`/`#undef` evidence [`dead_code_ranges`] already
+/// tracks: a caller-supplied fact standing in for evidence the file itself
+/// will never contain, not something inferred from it. See
+/// [`dead_code_ranges_with_assumptions`].
+pub type PlatformAssumptions = HashMap<String, bool>;
+
+/// A suggested starting point for [`PlatformAssumptions`]: "POSIX/Linux, no
+/// Windows/vxworks compatibility shims active" — assumes `_WIN32`,
+/// `_MSC_VER`, `__CYGWIN__`, and `__vxworks` undefined, and `__linux__` and
+/// `__unix__` defined. A convenience default for the common case, not a
+/// universal one — a caller targeting a different platform profile should
+/// build its own table instead of starting from this one.
+pub fn posix_default_assumptions() -> PlatformAssumptions {
+    [
+        ("_WIN32", false),
+        ("_MSC_VER", false),
+        ("__CYGWIN__", false),
+        ("__vxworks", false),
+        ("__linux__", true),
+        ("__unix__", true),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value))
+    .collect()
+}
+
 /// Computes the dead-code regions of `source`, a C or C++ translation unit.
 /// See the module documentation for exactly what is and isn't recognized.
 pub fn dead_code_ranges(source: &str) -> Vec<DeadCodeRegion> {
+    dead_code_ranges_impl(source, None)
+}
+
+/// Like [`dead_code_ranges`], but seeds macro definedness with a
+/// caller-supplied [`PlatformAssumptions`] table before walking the file —
+/// standing in for evidence a compiler-predefined platform macro (e.g.
+/// `_MSC_VER`, `__vxworks`) will never leave in the file's own text, which
+/// [`dead_code_ranges`] correctly declines to guess about (see the module
+/// documentation on sub-problem 2).
+///
+/// **Precedence:** a local `#define`/`#undef` for an assumed name overrides
+/// the assumption from the point it takes effect onward — this is the same
+/// `defined` map either way, and local evidence is simply written into it
+/// after the assumption seeds it. This is a deliberate choice, not an
+/// accident of implementation order: for the compiler-predefined platform
+/// flags this is aimed at, a portable file that itself `#define`s
+/// `_MSC_VER` or the like is unusual enough that it's more likely a bug in
+/// the caller's assumption table than a real signal worth suppressing —
+/// but since the file *did* say something concrete, trust it over an
+/// external guess.
+pub fn dead_code_ranges_with_assumptions(
+    source: &str,
+    assumed: &PlatformAssumptions,
+) -> Vec<DeadCodeRegion> {
+    dead_code_ranges_impl(source, Some(assumed))
+}
+
+fn dead_code_ranges_impl(
+    source: &str,
+    assumed: Option<&PlatformAssumptions>,
+) -> Vec<DeadCodeRegion> {
     let commented_out = commented_out_define_names(source);
-    let mut defined: HashMap<String, bool> = HashMap::new();
+    let mut defined: HashMap<String, bool> = assumed.cloned().unwrap_or_default();
     let mut regions = Vec::new();
     let mut stack: Vec<Frame> = Vec::new();
     let mut dead_start: Option<usize> = None;
@@ -634,5 +701,74 @@ mod tests {
     #[test]
     fn empty_source_yields_no_regions() {
         assert!(ranges("").is_empty());
+    }
+
+    fn ranges_with(
+        source: &str,
+        assumed: &PlatformAssumptions,
+    ) -> Vec<(usize, usize, DeadCodeReason)> {
+        dead_code_ranges_with_assumptions(source, assumed)
+            .into_iter()
+            .map(|r| (r.start_line, r.end_line, r.reason))
+            .collect()
+    }
+
+    // hostap's src/utils/common.h shape (RESOLVE_CONDITIONAL_TYPEDEFS.md):
+    // an #ifdef on a macro the file never itself defines is Neutral without
+    // an assumption, but resolves once the caller supplies one.
+    #[test]
+    fn assumption_makes_never_mentioned_macro_dead() {
+        let src = "#ifdef _MSC_VER\ntypedef UINT16 u16;\n#endif\n";
+        assert!(ranges(src).is_empty());
+
+        let mut assumed = PlatformAssumptions::new();
+        assumed.insert("_MSC_VER".to_string(), false);
+        assert_eq!(
+            ranges_with(src, &assumed),
+            vec![(2, 2, DeadCodeReason::NeverDefined)]
+        );
+    }
+
+    #[test]
+    fn assumption_true_keeps_ifdef_branch_live_and_else_dead() {
+        let src = "#ifdef __linux__\nlive();\n#else\ndead();\n#endif\n";
+        let mut assumed = PlatformAssumptions::new();
+        assumed.insert("__linux__".to_string(), true);
+        assert_eq!(
+            ranges_with(src, &assumed),
+            vec![(4, 4, DeadCodeReason::AlwaysDefined)]
+        );
+    }
+
+    #[test]
+    fn local_define_overrides_assumption() {
+        // The file itself #defines _MSC_VER despite the caller assuming it
+        // undefined — local evidence wins from that point on.
+        let src = "#define _MSC_VER\n#ifdef _MSC_VER\nlive();\n#endif\n";
+        let mut assumed = PlatformAssumptions::new();
+        assumed.insert("_MSC_VER".to_string(), false);
+        assert!(ranges_with(src, &assumed).is_empty());
+    }
+
+    #[test]
+    fn posix_default_assumptions_resolves_hostap_style_platform_split() {
+        let src = concat!(
+            "#ifdef _MSC_VER\n",             // 1
+            "typedef UINT16 u16;\n",         // 2
+            "#endif\n",                      // 3
+            "#ifdef __vxworks\n",            // 4
+            "typedef UINT16 u16;\n",         // 5
+            "#endif\n",                      // 6
+            "#ifndef WPA_TYPES_DEFINED\n",   // 7
+            "typedef unsigned short u16;\n", // 8
+            "#endif\n",                      // 9
+        );
+        assert_eq!(
+            ranges_with(src, &posix_default_assumptions()),
+            vec![
+                (2, 2, DeadCodeReason::NeverDefined),
+                (5, 5, DeadCodeReason::NeverDefined),
+            ]
+        );
     }
 }
