@@ -47,7 +47,8 @@ pub use dead_code_csharp::{csharp_dead_code_regions, CSharpDeadCodeRegion};
 #[cfg(feature = "lang-swift")]
 pub use dead_code_swift::{swift_dead_code_regions, SwiftDeadCodeRegion};
 pub use fingerprint::{
-    duplicate_groups, function_fingerprints, structural_hash, CorpusFingerprint, Fingerprint,
+    block_fingerprints, duplicate_groups, function_fingerprints, is_block_kind, structural_hash,
+    CorpusFingerprint, Fingerprint, FingerprintTier,
 };
 pub use imports::{distinct_import_count, import_sources};
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]

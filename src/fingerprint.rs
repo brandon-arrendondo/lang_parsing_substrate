@@ -38,6 +38,51 @@
 //! (renamed-identifier) clone matching; only the type annotation's text is
 //! folded in, and only for the top-level node being hashed, not every
 //! descendant.
+//!
+//! ## Reporting granularity (line vs. function)
+//!
+//! A [`Fingerprint`] already carries `start_line`/`end_line` alongside its
+//! `name`, so a consumer can report a match either as "function X duplicates
+//! function Y" (the name) or as "path:40-58 duplicates path:12-30" (the line
+//! range) purely from data already on this type — no substrate change is
+//! needed for that choice; it's a per-consumer reporting decision (see
+//! `DETECT_FINE_GRAINED_DUPLICATES.md`, Ask 1).
+//!
+//! ## Granularity tiers ([`FingerprintTier`])
+//!
+//! Every [`Fingerprint`] is tagged with the granularity its walk produced it
+//! at: [`FingerprintTier::Function`] (whole function-like subtrees, via
+//! [`function_fingerprints`]) or [`FingerprintTier::Block`] (loop/conditional/
+//! switch-like subtrees *inside* a function, via [`block_fingerprints`]).
+//! `Block` exists for a narrower use case than corpus-wide clone detection:
+//! a caller that already has one flagged region (e.g. a tools_sqc violation)
+//! and wants to search the corpus for other structurally similar regions,
+//! not just whole-function duplicates (`DETECT_FINE_GRAINED_DUPLICATES.md`,
+//! Ask 2). No new search primitive is needed for that: fingerprint the
+//! flagged node directly with [`structural_hash`] (already possible on any
+//! node), then look it up against a corpus's `Block`-tier fingerprints the
+//! same way [`duplicate_groups`] already groups by hash — either run the
+//! flagged hash through `duplicate_groups` alongside the corpus, or filter
+//! the corpus directly: `corpus.iter().filter(|fp| fp.fingerprint.tier ==
+//! FingerprintTier::Block && fp.fingerprint.hash == flagged_hash)`. A
+//! dedicated `find_similar` convenience wasn't added — that one-liner is
+//! documented as sufficient until a real caller's usage shows otherwise.
+//!
+//! `Block` tier is **syntactic-block**, not `crate::cfg`'s CFG basic blocks:
+//! it walks whole AST subtrees rooted at loop/conditional/switch-like nodes
+//! (see [`is_block_kind`]), unsplit by internal branches, rather than
+//! `cfg.rs`'s split-at-every-branch basic blocks. That trades CFG-level
+//! precision for coverage across all 16 languages `is_function_kind`-style
+//! walks already support, instead of only the three `cfg.rs` models
+//! (`c`/`cpp`/`rust`) — the targeted "does this flagged region recur
+//! elsewhere" search doesn't need CFG-level precision to be useful.
+//!
+//! Mixing tiers in one `Vec<CorpusFingerprint<S>>` is intentionally safe:
+//! [`duplicate_groups`] groups by `(hash, tier)`, not `hash` alone, so a
+//! `Block`-tier fingerprint can never coincidentally group with an unrelated
+//! `Function`-tier one just because they hash equal (e.g. a small flagged
+//! loop matching some other file's whole one-line function) — see that
+//! function's doc comment.
 
 use crate::calls::{get_function_name, is_function_kind};
 use crate::query::find_descendants;
@@ -45,7 +90,18 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tree_sitter::Node;
 
-/// One function-like subtree's structural fingerprint.
+/// The granularity a [`Fingerprint`] was produced at — see the module doc's
+/// "Granularity tiers" section for the design rationale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FingerprintTier {
+    /// A whole function-like subtree, from [`function_fingerprints`].
+    Function,
+    /// A loop/conditional/switch-like subtree inside a function, from
+    /// [`block_fingerprints`].
+    Block,
+}
+
+/// One function-like or block-like subtree's structural fingerprint.
 ///
 /// `kind` and byte/line ranges locate the subtree for reporting; `hash` is
 /// the value to group on for duplicate detection; `node_count` is the
@@ -55,8 +111,11 @@ use tree_sitter::Node;
 /// clone) and for ranking matches by how much code they actually cover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fingerprint {
-    /// The function's name, or `None` for an anonymous closure/lambda.
+    /// The function's name, or `None` for an anonymous closure/lambda and
+    /// always `None` at [`FingerprintTier::Block`] (blocks aren't named).
     pub name: Option<String>,
+    /// Which walk produced this fingerprint — see [`FingerprintTier`].
+    pub tier: FingerprintTier,
     /// Tree-sitter node kind the subtree was rooted at.
     pub kind: &'static str,
     /// Structural hash to group on for duplicate detection.
@@ -99,15 +158,27 @@ pub struct CorpusFingerprint<S> {
 /// matches this crate's other primitives in staying to the mechanical,
 /// unambiguous case and leaving fuzzier heuristics as a consumer concern.
 ///
+/// Grouped by `(hash, tier)`, not `hash` alone, so passing a corpus that
+/// mixes [`FingerprintTier::Function`] and [`FingerprintTier::Block`]
+/// fingerprints (e.g. the output of both [`function_fingerprints`] and
+/// [`block_fingerprints`] concatenated) can never produce a group spanning
+/// both tiers — a small flagged loop coincidentally hashing the same as some
+/// other file's whole one-line function would otherwise be a confusing
+/// result to hand back. Callers who only ever build single-tier corpora see
+/// no behavior change from this.
+///
 /// Group and within-group order is deterministic (sorted by hash, then by
 /// source-file position) rather than following `HashMap` iteration order,
 /// since callers may snapshot-test or otherwise rely on stable output.
 pub fn duplicate_groups<S: Ord + Clone>(
     fingerprints: &[CorpusFingerprint<S>],
 ) -> Vec<Vec<&CorpusFingerprint<S>>> {
-    let mut by_hash: HashMap<u64, Vec<&CorpusFingerprint<S>>> = HashMap::new();
+    let mut by_hash: HashMap<(u64, FingerprintTier), Vec<&CorpusFingerprint<S>>> = HashMap::new();
     for fp in fingerprints {
-        by_hash.entry(fp.fingerprint.hash).or_default().push(fp);
+        by_hash
+            .entry((fp.fingerprint.hash, fp.fingerprint.tier))
+            .or_default()
+            .push(fp);
     }
 
     let mut groups: Vec<Vec<&CorpusFingerprint<S>>> = by_hash
@@ -121,7 +192,7 @@ pub fn duplicate_groups<S: Ord + Clone>(
             members
         })
         .collect();
-    groups.sort_by_key(|members| members[0].fingerprint.hash);
+    groups.sort_by_key(|members| (members[0].fingerprint.hash, members[0].fingerprint.tier));
     groups
 }
 
@@ -152,6 +223,7 @@ pub fn function_fingerprints(root: Node, source: &str, min_nodes: usize) -> Vec<
             }
             Some(Fingerprint {
                 name: get_function_name(node, source),
+                tier: FingerprintTier::Function,
                 kind: node.kind(),
                 hash,
                 node_count,
@@ -162,6 +234,127 @@ pub fn function_fingerprints(root: Node, source: &str, min_nodes: usize) -> Vec<
             })
         })
         .collect()
+}
+
+/// Fingerprints every loop/conditional/switch-like subtree in `tree` (per
+/// [`is_block_kind`]), skipping any whose subtree has fewer than `min_nodes`
+/// AST nodes — the same noise-suppression floor [`function_fingerprints`]
+/// uses, applied at the smaller granularity (see the module doc's
+/// "Granularity tiers" section for why `Block` exists and what it's for).
+///
+/// Like [`function_fingerprints`] with nested functions, a nested block (a
+/// loop inside a loop, an `if` inside a `for` body) is fingerprinted both as
+/// part of its enclosing block's subtree and again independently — the walk
+/// doesn't stop at a block boundary once it's matched one.
+///
+/// Every returned [`Fingerprint`] has `name: None` — blocks aren't named —
+/// and `tier: `[`FingerprintTier::Block`].
+pub fn block_fingerprints(root: Node, source: &str, min_nodes: usize) -> Vec<Fingerprint> {
+    find_descendants(root, |n| is_block_kind(n.kind()))
+        .into_iter()
+        .filter_map(|node| {
+            let (hash, node_count) = hash_and_count(node, source.as_bytes());
+            if node_count < min_nodes {
+                return None;
+            }
+            Some(Fingerprint {
+                name: None,
+                tier: FingerprintTier::Block,
+                kind: node.kind(),
+                hash,
+                node_count,
+                start_byte: node.start_byte(),
+                end_byte: node.end_byte(),
+                start_line: node.start_position().row + 1,
+                end_line: node.end_position().row + 1,
+            })
+        })
+        .collect()
+}
+
+/// Returns `true` if `kind` is a loop/conditional/switch-like node this
+/// module treats as a `Block`-tier fingerprint root.
+///
+/// A flat match across all 16 languages, same shape as
+/// [`is_function_kind`] — node kind strings don't collide across grammars,
+/// so no per-language dispatch is needed to tell them apart. Each
+/// language's list below was verified against that language's vendored
+/// `tree-sitter-*` `node-types.json` (not guessed), covering: `if`,
+/// every loop form (`while`/`for`/`foreach`/`do-while`/`repeat`/
+/// unconditional `loop`), and `switch`/`match`/`when`/`select`-style
+/// dispatch — both the dispatching statement itself and, where the grammar
+/// gives each case/arm its own node kind, the individual arms (so two
+/// identically-shaped `case`/`match` arms in unrelated switches can match
+/// each other directly, not just as part of the whole switch).
+///
+/// Deliberately excludes plain scoping blocks (C's bare `{ }`, a function
+/// body) — those aren't "a flagged region" in the sense this tier targets
+/// (see the module doc); a bare block's contents are still reachable, just
+/// via whatever loop/conditional/function actually roots them.
+pub fn is_block_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        // C / C++ (tree-sitter-c 0.24.2, tree-sitter-cpp 0.23.4)
+        "if_statement"
+            | "while_statement"
+            | "for_statement"
+            | "for_range_loop" // cpp
+            | "do_statement"
+            | "switch_statement"
+            | "case_statement"
+            // Rust (tree-sitter-rust 0.24.2)
+            | "if_expression"
+            | "while_expression"
+            | "for_expression"
+            | "loop_expression"
+            | "match_expression"
+            | "match_arm"
+            // Python (tree-sitter-python 0.25.0)
+            | "match_statement"
+            | "case_clause" // also Scala's match-arm kind, see below
+            // JavaScript / TypeScript (tree-sitter-javascript 0.25.0,
+            // tree-sitter-typescript 0.23.2)
+            | "for_in_statement"
+            | "switch_case"
+            | "switch_default"
+            // Go (tree-sitter-go 0.25.0)
+            | "expression_switch_statement"
+            | "type_switch_statement"
+            | "select_statement"
+            | "expression_case"
+            | "type_case"
+            | "communication_case"
+            // Java (tree-sitter-java 0.23.5)
+            | "enhanced_for_statement"
+            | "switch_expression" // also C#'s switch-expression kind
+            | "switch_block_statement_group"
+            | "switch_rule" // Java's arrow-style case label
+            // C# (tree-sitter-c-sharp 0.23.5)
+            | "foreach_statement" // also PHP's foreach kind
+            | "switch_expression_arm"
+            | "switch_section"
+            // Kotlin (tree-sitter-kotlin-ng 1.1.0)
+            | "do_while_statement"
+            | "when_expression"
+            | "when_entry"
+            // Swift (tree-sitter-swift 0.7.3)
+            | "repeat_while_statement"
+            | "switch_entry"
+            // PHP (tree-sitter-php 0.24.2)
+            | "match_conditional_expression"
+            // Fortran (tree-sitter-fortran 0.6.0)
+            | "do_loop"
+            | "select_case_statement"
+            | "forall_statement"
+            // Scala (tree-sitter-scala 0.26.2)
+            | "do_while_expression"
+            | "type_case_clause"
+            // Lua (tree-sitter-lua 0.5.0)
+            | "repeat_statement"
+            // Ada (tree-sitter-ada 0.1.0)
+            | "loop_statement"
+            | "case_statement_alternative"
+    )
 }
 
 /// Iterative pre-order walk (explicit stack, matching [`crate::query`]'s
@@ -394,5 +587,126 @@ mod tests {
             })
             .collect();
         assert!(duplicate_groups(&all).is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "lang-c")]
+    fn block_tier_finds_match_between_non_duplicate_functions() {
+        // The driving use case from DETECT_FINE_GRAINED_DUPLICATES.md: two
+        // *whole functions* that are structurally unrelated (different
+        // statements before/after, different return type) share one
+        // identical `for` loop. Only Block-tier fingerprinting surfaces that
+        // match — Function-tier fingerprinting of these two functions must
+        // NOT match, since the point is that the match is only visible at
+        // sub-function granularity.
+        let a_src = "int f(int *arr, int n) { \
+            int total = 0; \
+            for (int i = 0; i < n; i++) { total = total + arr[i]; } \
+            return total; }";
+        let b_src = "void g(int *arr, int n) { \
+            printf(\"start\"); \
+            for (int i = 0; i < n; i++) { total = total + arr[i]; } \
+            printf(\"end\"); }";
+        let tree_a = parse(a_src, tree_sitter_c::LANGUAGE.into());
+        let tree_b = parse(b_src, tree_sitter_c::LANGUAGE.into());
+
+        let fn_a = function_fingerprints(tree_a.root_node(), a_src, 0);
+        let fn_b = function_fingerprints(tree_b.root_node(), b_src, 0);
+        assert_ne!(
+            fn_a[0].hash, fn_b[0].hash,
+            "f and g must not be function-tier duplicates of each other"
+        );
+
+        let block_a = block_fingerprints(tree_a.root_node(), a_src, 0);
+        let block_b = block_fingerprints(tree_b.root_node(), b_src, 0);
+        let for_a = block_a
+            .iter()
+            .find(|fp| fp.kind == "for_statement")
+            .expect("f's for-loop should be a Block-tier fingerprint");
+        let for_b = block_b
+            .iter()
+            .find(|fp| fp.kind == "for_statement")
+            .expect("g's for-loop should be a Block-tier fingerprint");
+        assert_eq!(
+            for_a.hash, for_b.hash,
+            "the two functions' identical for-loop bodies should match at Block tier"
+        );
+        assert_eq!(for_a.tier, FingerprintTier::Block);
+        assert!(for_a.name.is_none(), "blocks are never named");
+    }
+
+    #[test]
+    #[cfg(feature = "lang-c")]
+    fn block_fingerprints_min_nodes_filters_out_trivial_subtrees() {
+        let source = "int f(int x) { if (x) { x = 1; } return x; }";
+        let tree = parse(source, tree_sitter_c::LANGUAGE.into());
+        let all = block_fingerprints(tree.root_node(), source, 0);
+        assert!(!all.is_empty());
+        let filtered = block_fingerprints(tree.root_node(), source, 1_000);
+        assert!(filtered.is_empty());
+    }
+
+    fn fp_with(tier: FingerprintTier, hash: u64, start_byte: usize) -> Fingerprint {
+        Fingerprint {
+            name: None,
+            tier,
+            kind: "for_statement",
+            hash,
+            node_count: 5,
+            start_byte,
+            end_byte: start_byte + 1,
+            start_line: 1,
+            end_line: 1,
+        }
+    }
+
+    #[test]
+    fn duplicate_groups_keeps_function_and_block_tiers_separate() {
+        // Two Function-tier fingerprints and two Block-tier fingerprints
+        // deliberately share the same hash (a contrived collision — the
+        // scenario Ask 2 flags: a flagged loop shouldn't group with an
+        // unrelated whole function just because they hash equal). They must
+        // form two separate two-member groups, never one four-member group.
+        const COLLIDING_HASH: u64 = 42;
+        let all = vec![
+            CorpusFingerprint {
+                source: "a.c",
+                fingerprint: fp_with(FingerprintTier::Function, COLLIDING_HASH, 0),
+            },
+            CorpusFingerprint {
+                source: "b.c",
+                fingerprint: fp_with(FingerprintTier::Function, COLLIDING_HASH, 10),
+            },
+            CorpusFingerprint {
+                source: "c.c",
+                fingerprint: fp_with(FingerprintTier::Block, COLLIDING_HASH, 0),
+            },
+            CorpusFingerprint {
+                source: "d.c",
+                fingerprint: fp_with(FingerprintTier::Block, COLLIDING_HASH, 10),
+            },
+        ];
+
+        let groups = duplicate_groups(&all);
+        assert_eq!(
+            groups.len(),
+            2,
+            "cross-tier hash collision must not merge into one group"
+        );
+        for group in &groups {
+            assert_eq!(group.len(), 2);
+            let tier = group[0].fingerprint.tier;
+            assert!(
+                group.iter().all(|m| m.fingerprint.tier == tier),
+                "a group must not mix tiers"
+            );
+        }
+        let tiers: std::collections::HashSet<FingerprintTier> =
+            groups.iter().map(|g| g[0].fingerprint.tier).collect();
+        assert_eq!(
+            tiers.len(),
+            2,
+            "expected one Function group and one Block group"
+        );
     }
 }
