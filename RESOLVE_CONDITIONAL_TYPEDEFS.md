@@ -11,12 +11,12 @@ made on the two open questions below: assumption-vs-local-evidence
 precedence went to "local wins" (an assumed name's `defined` map entry is
 simply overwritten by any local `#define`/`#undef`, the same map either
 way), and a small default table (`posix_default_assumptions`) was added here
-rather than left to each consumer. Consumer-side wiring in tools_sqc
+rather than left to each consumer. Consumer-side wiring in aurora-lint
 (`typedef_types` et al., see below) is still open — not part of this ask.
 
-Written up from tools_sqc's side after a concrete recall regression traced to
+Written up from aurora-lint's side after a concrete recall regression traced to
 a real bug; this doc was the handoff so an agent here could scope and design
-it without re-deriving the background from tools_sqc. Sibling doc to
+it without re-deriving the background from aurora-lint. Sibling doc to
 `DETECT_DEAD_CODE_REGIONS.md` — read that one first if you haven't; this ask
 reuses its machinery and its own documentation explains why the two are
 **not** the same problem, which matters more than it looks like it should.
@@ -32,7 +32,7 @@ constants, ...) can tell which of several textually-present, same-named
 conditional (re)definitions is the one that would actually survive
 preprocessing under that assumed platform — instead of blindly taking
 whichever one appears first in the file, which is what every such collector
-in tools_sqc does today and is measurably wrong.
+in aurora-lint does today and is measurably wrong.
 
 **Explicitly not asked for:** enumerating every possible `#ifdef`
 combination, evaluating arbitrary boolean guard expressions precisely, or
@@ -41,9 +41,9 @@ once per platform). See "Why this doesn't need path enumeration" below —
 that's the actual insight this doc exists to hand off, not just the bug
 report.
 
-## Where this bites tools_sqc today (concrete, measured)
+## Where this bites aurora-lint today (concrete, measured)
 
-`tools_sqc/src/analyze/prescan.rs::collect_from_simple_typedef` builds
+`aurora-lint/src/analyze/prescan.rs::collect_from_simple_typedef` builds
 `ProjectContext::typedef_types` (a flat `HashMap<String, String>`, one
 project-wide alias name → its RHS type text) with:
 
@@ -88,7 +88,7 @@ detected after the fix landed — 59 real, previously-confirmed bugs stopped
 being flagged, not because the fix's own logic is wrong (verified directly:
 a minimal single-definition `typedef unsigned short u16;` resolves and fires
 correctly), but because the type resolution it depends on silently returns
-the wrong answer for every hostap-native narrow type. Filed on the tools_sqc
+the wrong answer for every hostap-native narrow type. Filed on the aurora-lint
 side as a P1 task (`RULE_FIX_BACKLOG.md` §4 / `PENDING_COORDINATOR_SYNC.md`
 §2.10 in that repo, if either is still there when you read this) with the
 explicit note that landing a fix needs a full benchmark comparison across
@@ -125,7 +125,7 @@ file ever writes `#define _MSC_VER` or `#undef _MSC_VER` itself, so
 `dead_code_ranges` correctly finds **zero local textual evidence** for either
 and, by design, declines to classify either branch as dead. That restraint is
 exactly right for *its* job (an FP-safe suppression filter, wrong 0% of the
-time it fires): a scanner exists in tools_sqc's `suppression.rs` today for
+time it fires): a scanner exists in aurora-lint's `suppression.rs` today for
 the general case, and its whole value is not guessing on a macro the file
 gives no opinion about, hostap's `common.h` is the textbook example of a file
 that gives no local opinion about `_MSC_VER`. What this ask needs is the
@@ -152,12 +152,12 @@ one level of `#ifdef` for a platform split) —
    fallback branch), not exponential — nothing here asks for the cross
    product of every macro in the file, only "which of the *specific*
    textually-competing definitions for *this one name* wins";
-2. **tools_sqc's own benchmark corpus is single-platform per codebase
+2. **aurora-lint's own benchmark corpus is single-platform per codebase
    already** — eleven of twelve real-world oracles are POSIX/Linux, and the
    twelfth (Ventoy) was deliberately onboarded as its *own* codebase
    specifically to get Win32-API visibility, rather than trying to make an
    existing POSIX oracle multi-platform-aware. If some other platform's
-   type/macro visibility ever turns out to matter, the tools_sqc-side answer
+   type/macro visibility ever turns out to matter, the aurora-lint-side answer
    is "onboard a benchmark for that platform" (Ventoy's own precedent), not
    "make one scan carry several CFLAGS-varied interpretations of the same
    codebase" — so this substrate feature only ever needs to resolve **one**
@@ -202,7 +202,7 @@ assumption table than a real signal — decide once, document it, don't leave
 it implicit in whichever order the code happens to check things.
 
 A reasonable default `PlatformAssumptions` table for "POSIX/Linux, no
-Windows/vxworks compatibility shims active" (the profile every tools_sqc
+Windows/vxworks compatibility shims active" (the profile every aurora-lint
 real-world oracle except Ventoy wants) is a small, static, hand-curated list
 — `_WIN32`/`_MSC_VER`/`__vxworks`/`__CYGWIN__` assumed false, `__linux__`/
 `__unix__` assumed true, and so on. Whether that table lives here (as a
@@ -211,10 +211,10 @@ open — a small curated default here seems more useful than every consumer
 re-deriving the same list, but it's genuinely a call for whoever designs the
 API, not a requirement.
 
-## Consumers, once this exists (tools_sqc side, not part of this ask)
+## Consumers, once this exists (aurora-lint side, not part of this ask)
 
 Once `dead_code_ranges_with_assumptions` (or whatever shape you land on)
-exists, tools_sqc's job is to feed the resulting regions into its own
+exists, aurora-lint's job is to feed the resulting regions into its own
 first-wins collectors so a definition landing in a dead region is skipped
 rather than raced against a live one:
 
@@ -227,7 +227,7 @@ rather than raced against a live one:
   unconfirmed impact).
 - Any object-like macro *value* table used for constant evaluation across
   files, if one takes the same "first `#define` wins" shortcut — not
-  inventoried in this pass; whoever picks up the tools_sqc side should grep
+  inventoried in this pass; whoever picks up the aurora-lint side should grep
   for the same `.entry(...).or_insert` shape against a raw per-line walk of
   `#define`s before assuming typedefs are the only place this bites.
 
@@ -246,7 +246,7 @@ before merging, independent of whatever API shape ships here.
   simple `&&`-chains of same) — if a guard is too complex to classify today,
   it stays `Neutral` under this extension too, same as it does now for a
   file-internal macro.
-- No per-codebase multi-CFLAGS re-scanning in tools_sqc's benchmark harness
+- No per-codebase multi-CFLAGS re-scanning in aurora-lint's benchmark harness
   — see the scoping insight above; a platform visibility gap gets a new
   benchmark oracle (Ventoy's precedent), not a second scan of an existing
   one under different assumed defines.
@@ -265,7 +265,7 @@ before merging, independent of whatever API shape ships here.
   function, `dead_code_ranges_with_assumptions`, leaving `dead_code_ranges`'s
   signature untouched — no existing caller needs to change.
 
-## Open questions for whoever picks up the tools_sqc side
+## Open questions for whoever picks up the aurora-lint side
 
 - Wiring `typedef_types` (`prescan.rs::collect_from_simple_typedef`) to skip
   a definition landing in a region `dead_code_ranges_with_assumptions`

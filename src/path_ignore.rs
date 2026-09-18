@@ -1,7 +1,7 @@
 //! External-config path ignoring — glob patterns from `toolchain.toml`
 //! `[ignore].paths` and per-tool `[<tool>.ignore]` sections.
 //!
-//! One glob-matching implementation shared by knots, moldy, and tools_sqc
+//! One glob-matching implementation shared by knots, moldy, and aurora-lint
 //! instead of three reimplementations. See `docs/unified-config-spec.md`.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};

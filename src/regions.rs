@@ -2,7 +2,7 @@
 //!
 //! See `docs/unified-config-spec.md` for the full comment syntax. This module
 //! covers only the block-region form (`tools:off [TOOL[,TOOL,...]]` /
-//! `tools:on`) — the precursor primitive that knots, moldy, and tools_sqc all
+//! `tools:on`) — the precursor primitive that knots, moldy, and aurora-lint all
 //! need identically. The richer `tools:suppress TOOL:RULE` single-line syntax
 //! builds on top of this and is out of scope here.
 

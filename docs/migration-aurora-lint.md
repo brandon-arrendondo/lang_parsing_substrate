@@ -1,4 +1,4 @@
-# Migrating tools_sqc to lang-parsing-substrate
+# Migrating aurora-lint to lang-parsing-substrate
 
 **Status:** IMPLEMENTED locally (uncommitted working tree); **benchmark validation pending.**
 Full local suite green: 3404 + 39 + 13 tests pass (was 3404 + 39 + 13 on the 0.22 baseline), zero new
@@ -10,7 +10,7 @@ cover.
 **What was actually done (smaller than the worst case below):**
 - The query/`StreamingIterator` break was **1 production file** (EXP42-C), not many.
 - The old `tree_sitter_c::language()` API appeared at **22 sites**; all now route through a single
-  `crate::parser::c_language()` helper that sources the grammar from the substrate. tools_sqc has **no
+  `crate::parser::c_language()` helper that sources the grammar from the substrate. aurora-lint has **no
   direct `tree-sitter-c` dep** anymore (added `lang-parsing-substrate` with `default-features=false,
   features=["lang-c"]`, kept `tree-sitter = "0.25"` core, added `streaming-iterator`).
 - Detection centralized: `.c`/`.h` checks in `files/directory.rs` (×2) and `files/git.rs` now call
@@ -24,7 +24,7 @@ cover.
   asm-opaque (never a genuine read). See `src/rules/cert_c/EXP/EXP33-C/exp33_c.rs`.
 
 **Effort:** large (several days), but **the cost is a tree-sitter version upgrade, not language detection.**
-The detection-centralization part is small; adopting the substrate forces tools_sqc off its pinned
+The detection-centralization part is small; adopting the substrate forces aurora-lint off its pinned
 `tree-sitter 0.22` / `tree-sitter-c 0.21` onto the substrate's `0.25` / `tree-sitter-c 0.24`, and that
 upgrade ripples through ~150 rules.
 
@@ -35,11 +35,11 @@ separate, much larger future effort that is explicitly **out of scope** here (se
 
 ## Part A — the small part: adopt the substrate for detection + dispatch
 
-### `tools_sqc/Cargo.toml`
+### `aurora-lint/Cargo.toml`
 
 - Add: `lang-parsing-substrate = { path = "../lang_parsing_substrate", default-features = false, features = ["lang-c"] }`
   - `default-features = false` is **essential** — without it the substrate enables all 16 languages and
-    file discovery starts matching `.py`, `.rs`, etc. tools_sqc is C-only.
+    file discovery starts matching `.py`, `.rs`, etc. aurora-lint is C-only.
   - Add `"lang-cpp"` only if/when C++ support is actually wanted. Not required for the migration.
 - Remove the direct `tree-sitter = "0.22"` and `tree-sitter-c = "0.21"` pins; reach the grammar through
   the substrate (`lang_parsing_substrate::tree_sitter_c`) or keep a `tree-sitter = "0.25"` dep for the
@@ -113,15 +113,15 @@ not Tier 1**, and must not creep into this migration:
   `rules/cert_c/mod.rs`).
 - Language-agnostic AST utilities (replacing `utility/cert_c/`).
 
-These belong to substrate **Tier 4** (the rule engine that tools_sqc eventually *donates upward*).
-For now, rule node-kind logic stays in tools_sqc and is touched **only** where B2 forces it.
+These belong to substrate **Tier 4** (the rule engine that aurora-lint eventually *donates upward*).
+For now, rule node-kind logic stays in aurora-lint and is touched **only** where B2 forces it.
 
 ---
 
 ## Doc correction
 
-The substrate's `CLAUDE.md` lists tools_sqc's storage as "SQLite (path+mtime keyed)". This is **wrong**:
-tools_sqc uses a **`bincode`** prescan cache (`src/analyze/prescan.rs`, load/save at
+The substrate's `CLAUDE.md` lists aurora-lint's storage as "SQLite (path+mtime keyed)". This is **wrong**:
+aurora-lint uses a **`bincode`** prescan cache (`src/analyze/prescan.rs`, load/save at
 `analyze/mod.rs:237-285`) keyed by **scan scope, with no mtime/hash tracking**. Unaffected by this
 migration, but the table in CLAUDE.md should be corrected.
 

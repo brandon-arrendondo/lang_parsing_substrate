@@ -23,7 +23,7 @@
 //! subtrees with the same kinds in a different shape (e.g. `a` nested three
 //! deep vs. three `a` siblings) must not collide. `std::hash::DefaultHasher`
 //! is used deliberately over `RandomState`-seeded hashing: fingerprints are
-//! meant to be persisted (e.g. tools_sqc's SQLite store) and compared across
+//! meant to be persisted (e.g. aurora-lint's SQLite store) and compared across
 //! separate process runs, so the hash must be stable, not per-process-random.
 //!
 //! One deliberate exception to "ignore identifier text": the hashed node's
@@ -55,7 +55,7 @@
 //! [`function_fingerprints`]) or [`FingerprintTier::Block`] (loop/conditional/
 //! switch-like subtrees *inside* a function, via [`block_fingerprints`]).
 //! `Block` exists for a narrower use case than corpus-wide clone detection:
-//! a caller that already has one flagged region (e.g. a tools_sqc violation)
+//! a caller that already has one flagged region (e.g. an aurora-lint violation)
 //! and wants to search the corpus for other structurally similar regions,
 //! not just whole-function duplicates (`DETECT_FINE_GRAINED_DUPLICATES.md`,
 //! Ask 2). No new search primitive is needed for that: fingerprint the
@@ -135,7 +135,7 @@ pub struct Fingerprint {
 /// A [`Fingerprint`] tagged with whatever the caller uses to identify its
 /// source file (a path, a DB row id, ...). `S` is left generic rather than
 /// fixed to e.g. `PathBuf` since callers already have their own preferred
-/// file-identifier type (tools_sqc's SQLite store keys by path+mtime;
+/// file-identifier type (aurora-lint's SQLite store keys by path+mtime;
 /// knots/moldy likely just use a path) and forcing a conversion at this
 /// boundary would be pure overhead.
 #[derive(Debug, Clone, PartialEq, Eq)]

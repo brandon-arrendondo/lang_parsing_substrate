@@ -4,7 +4,7 @@
 //! (`language_for_header_content`), or by registry key
 //! (`language_for_key`). Also the extension-classification predicates
 //! (`is_source_extension`, `is_parseable_extension`) that drive recursive
-//! file discovery in every consumer (knots, moldy, tools_sqc).
+//! file discovery in every consumer (knots, moldy, aurora-lint).
 
 use std::path::Path;
 use std::sync::OnceLock;

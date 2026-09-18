@@ -4,7 +4,7 @@
 //! graphs, control-flow graphs, structural fingerprinting, suppression
 //! comments — built on top of a unified [`registry::LanguageInfo`] table
 //! across 16 languages, compiled in at build time via Cargo feature flags.
-//! Consumers include knots, moldy, and tools_sqc; see this crate's README
+//! Consumers include knots, moldy, and aurora-lint; see this crate's README
 //! for the full module-to-purpose table.
 
 #![warn(missing_docs)]

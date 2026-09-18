@@ -7,7 +7,7 @@ dispatch for C (and 15 other languages), but has no notion of *which C
 standard* a given file targets. That's come up as potentially relevant to
 three downstream consumers:
 
-- **tools_sqc** — CERT-C rule applicability differs by standard (some rules
+- **aurora-lint** — CERT-C rule applicability differs by standard (some rules
   only apply pre-C99, others are new in C11, e.g. around `_Generic` or
   optional VLA support).
 - **moldy** — formatting has standard-dependent edge cases (`//` comments

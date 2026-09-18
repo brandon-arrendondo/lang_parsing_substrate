@@ -28,7 +28,7 @@ for every hashed subtree (`src/fingerprint.rs`, the `Fingerprint` struct) —
 a consumer collapsing a match down to "function X vs function Y" is
 throwing away data it already has, not working around a substrate gap.
 **No substrate change is strictly required** — this is a consumer-side
-reporting flag (report by name vs. by line span) in knots/moldy/tools_sqc's
+reporting flag (report by name vs. by line span) in knots/moldy/aurora-lint's
 own output formatting. Worth a one-line callout in `fingerprint.rs`'s module
 doc so a future reader doesn't assume the line data isn't there; a small
 `ReportMode`-style formatting helper here is optional convenience, not a
@@ -39,7 +39,7 @@ requirement (same posture as `posix_default_assumptions` in
 
 **The concrete use case driving this** (not "find all clones in the
 codebase" — that's the already-shipped Tier 5 job): a caller has *already*
-flagged a specific region of code as a problem (e.g. a tools_sqc CERT-C
+flagged a specific region of code as a problem (e.g. an aurora-lint CERT-C
 violation, or a manually-flagged region) and wants to know **where else in
 the corpus does something structurally similar to just this one region
 appear** — turning "grep the whole codebase" (needle in a haystack) into "do

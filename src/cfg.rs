@@ -1,7 +1,7 @@
 //! Language-agnostic control-flow graph / basic-block construction on top of
 //! the tree-sitter parse — Tier 3 of the substrate's capability model (see
-//! the crate README/CLAUDE.md). Generalizes the shape of tools_sqc's C-only
-//! CFG builder (`tools_sqc/src/analyze/cfg.rs`) for shared use.
+//! the crate README/CLAUDE.md). Generalizes the shape of aurora-lint's C-only
+//! CFG builder (`aurora-lint/src/analyze/cfg.rs`) for shared use.
 //!
 //! v1 scope covers `c`, `cpp`, and `rust`. Like `language_for_file`,
 //! [`build_function_cfg`] never fabricates a result for a language it
@@ -11,13 +11,13 @@
 //!
 //! Deliberately out of scope for v1 (kept simple to avoid the correctness
 //! risk of guessing at un-verified per-language quirks): `switch`/`match`
-//! decomposition (treated as one opaque statement, matching tools_sqc's own
+//! decomposition (treated as one opaque statement, matching aurora-lint's own
 //! existing precedent for C `switch`), `goto`/labeled statements, and
-//! constant-condition dead-branch folding (tools_sqc's `MacroConstantMap` is
+//! constant-condition dead-branch folding (aurora-lint's `MacroConstantMap` is
 //! a C-preprocessor-specific concept; a generic constant-folding hook is
 //! left to a future task if a second language needs it).
 //!
-//! This module does not migrate tools_sqc's or knots' existing call sites —
+//! This module does not migrate aurora-lint's or knots' existing call sites —
 //! see the substrate's task history for why that migration, if ever done,
 //! belongs to its own follow-up task rather than this one.
 

@@ -1,11 +1,11 @@
 //! Generic AST pattern-matching primitives shared across the substrate's
 //! consumers — a thin "find nodes matching a predicate" query layer over
 //! tree-sitter, generalizing the ad hoc recursive search helpers duplicated
-//! across tools_sqc's ~290 CERT-C rules (see its `utility/cert_c/ast_utils.rs`).
+//! across aurora-lint's ~290 CERT-C rules (see its `utility/cert_c/ast_utils.rs`).
 //!
 //! v1 deliberately stays pattern-language-free: no rule registry, no
 //! severity/violation vocabulary, no DSL. Those are tool-specific (CERT-C
-//! IDs and severities for tools_sqc, metric thresholds for knots, style
+//! IDs and severities for aurora-lint, metric thresholds for knots, style
 //! knobs for moldy) and stay in each consumer. What's shared is just the
 //! mechanical "find descendants/ancestors matching a predicate" traversal —
 //! genuinely language-agnostic since it only touches node kinds and byte
@@ -13,7 +13,7 @@
 //! [`crate::cfg`], which needs one because control-flow node kinds vary by
 //! grammar; a "does this node's kind equal X" predicate does not).
 //!
-//! This module does not migrate tools_sqc's own rule engine — see the
+//! This module does not migrate aurora-lint's own rule engine — see the
 //! substrate's task history (task 14's CFG generalization) for why that
 //! migration, if ever done, belongs to its own follow-up task rather than
 //! this one.
@@ -37,7 +37,7 @@ pub fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
 ///
 /// Iterative (explicit stack), not recursive: a real-world config file with
 /// a multi-thousand-deep else-if chain overflowed the call stack under a
-/// naive recursive walk of this same shape in a consumer (tools_sqc task
+/// naive recursive walk of this same shape in a consumer (aurora-lint task
 /// 153) — this module must not reintroduce that risk for any language/AST
 /// shape with unbounded nesting depth.
 pub fn find_descendants<'a>(root: Node<'a>, predicate: impl Fn(Node<'a>) -> bool) -> Vec<Node<'a>> {
@@ -220,7 +220,7 @@ mod tests {
     fn find_descendants_handles_deeply_nested_input_without_overflowing_the_stack() {
         // Regression: a multi-thousand-deep else-if chain in a real config
         // file overflowed the call stack under a recursive walk of this
-        // exact shape (tools_sqc task 153). 20k levels is well past any
+        // exact shape (aurora-lint task 153). 20k levels is well past any
         // depth a recursive implementation on a normal thread stack survives.
         let depth = 20_000;
         let mut source = String::new();

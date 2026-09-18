@@ -1,6 +1,6 @@
 # lang-parsing-substrate — developer guide for Claude
 
-Shared Rust **library crate** — the common parsing substrate for knots, moldy, and tools_sqc.
+Shared Rust **library crate** — the common parsing substrate for knots, moldy, and aurora-lint.
 Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` registry across
 16 languages, compiled in at build time via Cargo feature flags.
 
@@ -24,7 +24,7 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 
 - **`language_for_file` returns `Option<Language>`** — never a fallback. If a language feature is disabled, its extensions return `None`. It is extension-only (no I/O): `.h` always resolves to the C grammar regardless of content. Callers that already have the file's bytes and want best-effort C-vs-C++ disambiguation for `.h` should use `language_for_header_content(path, source)` instead (see `src/cpp_header.rs`) — it defers to `language_for_file` for every other extension and only overrides `.h` when the content contains an unambiguous C++-only construct.
 - **`languages()` is runtime-constructed** via `OnceLock<Vec<LanguageInfo>>`. It cannot be a `const` because its contents vary by compiled feature set. Do not attempt to make it `const`.
-- **Feature flags are the language gate** — every language is an optional Cargo dep. The `all-languages` feature enables all 16. Consumers use `default-features = false` to opt into a subset (e.g. tools_sqc only needs `lang-c,lang-cpp`).
+- **Feature flags are the language gate** — every language is an optional Cargo dep. The `all-languages` feature enables all 16. Consumers use `default-features = false` to opt into a subset (e.g. aurora-lint only needs `lang-c,lang-cpp`).
 - **Grammar re-exports are cfg-gated** — `pub use tree_sitter_rust` is `#[cfg(feature = "lang-rust")]`. Consumers reach grammars transitively without their own direct deps.
 
 ## Adding a new language
@@ -40,7 +40,7 @@ Provides language detection, tree-sitter grammar dispatch, and `LanguageInfo` re
 |------|----------------|--------------------|----|
 | knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
 | moldy | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
-| tools_sqc | always full-scan | always ON | SQLite (path+mtime keyed) |
+| aurora-lint | always full-scan | always ON | SQLite (path+mtime keyed) |
 
 Cross-file features (Tier 2: import graph, call graph; Tier 3: CFG; Tier 4: pattern matching)
 are not yet implemented — see `todo.db` for open tasks.
@@ -52,14 +52,14 @@ are not yet implemented — see `todo.db` for open tasks.
 | 1 | Parse layer — language detection, tree-sitter dispatch, source bytes | **Done** |
 | 2 | Graph layer — import graph (Ce/Ca/Instability), call graph | Pending |
 | 3 | Control flow / basic blocks | Pending |
-| 4 | Pattern matching — generalized rule engine (from tools_sqc) | Pending |
+| 4 | Pattern matching — generalized rule engine (from aurora-lint) | Pending |
 | 5 | Fingerprinting / similarity (code dedup) | Speculative |
 
 ## Related projects
 
 - `../knots/` — complexity metrics tool; CLAUDE.md there is the knots developer guide
 - `../moldy/` — formatting tool
-- `../tools_sqc/` — CERT-C compliance tool; has the rule engine that becomes Tier 4
+- `../aurora-lint/` — CERT-C compliance tool; has the rule engine that becomes Tier 4
 
 ## Fixed-form Fortran dependency note
 

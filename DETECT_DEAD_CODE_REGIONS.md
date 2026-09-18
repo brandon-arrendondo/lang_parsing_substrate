@@ -6,24 +6,24 @@ needed, per the "worth confirming" note below). Covers both sub-problems in one
 pass as suggested. `#undef` tracking (open question below) was implemented,
 not skipped — the state machine needed a "currently defined at this point in
 the file" lookup either way, and tracking `#undef` was no extra structural
-cost once that existed. Migration of tools_sqc's local
-`compute_dead_code_ranges` to call this is a tools_sqc-side follow-up, not
+cost once that existed. Migration of aurora-lint's local
+`compute_dead_code_ranges` to call this is an aurora-lint-side follow-up, not
 done here.
 
-Originally written up from tools_sqc's side after a concrete
+Originally written up from aurora-lint's side after a concrete
 false-positive investigation surfaced a gap that, on inspection, also affects knots.
 No substrate code exists yet; this doc is the handoff of what's known so an agent
-here can scope and design it without re-deriving the background from tools_sqc.
+here can scope and design it without re-deriving the background from aurora-lint.
 
 ## The ask
 
 Add a shared, line-based (**not** tree-sitter-based — see "Why not tree-sitter"
 below) utility that computes the 1-based inclusive line ranges of a C/C++ file
 that are never compiled — i.e. that a preprocessor would strip before the
-compiler ever sees them. Two sub-problems, one already solved in tools_sqc,
+compiler ever sees them. Two sub-problems, one already solved in aurora-lint,
 one not:
 
-1. **Solved (in tools_sqc only today):** literal `#if 0` and `__cplusplus`-gated
+1. **Solved (in aurora-lint only today):** literal `#if 0` and `__cplusplus`-gated
    C++-only branches (`#ifdef __cplusplus`, `#if defined(__cplusplus) [&&…]`,
    and the dead `#else` of `#ifndef __cplusplus`).
 2. **Not yet solved anywhere:** `#ifdef MACRO` / `#if defined(MACRO)` where
@@ -32,13 +32,13 @@ one not:
    always live, `#else` is dead), or never validly `#define`d in scope, e.g.
    commented out (branch is always dead).
 
-Consumers: **tools_sqc** (already has #1, needs #2) and **knots** (has neither,
+Consumers: **aurora-lint** (already has #1, needs #2) and **knots** (has neither,
 confirmed gap — see below). **moldy does not need this** — see "Why moldy is
 out" below; don't build for it.
 
-## Where #1 already lives, today, in tools_sqc
+## Where #1 already lives, today, in aurora-lint
 
-`tools_sqc/src/analyze/suppression.rs`, `compute_dead_code_ranges` +
+`aurora-lint/src/analyze/suppression.rs`, `compute_dead_code_ranges` +
 `classify_conditional` + `classify_cpp_if` (filed as task 229). Full current
 logic, reproduced here so the shape is visible without cloning that repo:
 
@@ -111,9 +111,9 @@ across tools via `suppress.toml`'s `tool` field) — not as a tree-sitter query.
 
 ## The gap that isn't solved anywhere: named-macro definedness (#2)
 
-### Where it bit tools_sqc: MSC24-C delta-adjudication, task 540
+### Where it bit aurora-lint: MSC24-C delta-adjudication, task 540
 
-Full writeup: `tools_sqc/data/precision_audit/DELTA_MSC24_TASK540.md`. Summary:
+Full writeup: `aurora-lint/data/precision_audit/DELTA_MSC24_TASK540.md`. Summary:
 adjudicating MSC24-C ("do not use deprecated/obsolescent functions") findings
 on raylib found 14 FPs (of 228 in-scope), **all** in one function,
 `ExportFontAsCode()` in `src/rtext.c`, all sharing one root cause. Two concrete
@@ -134,7 +134,7 @@ shapes, both at real line numbers from that pass:
   actually defined, so the `#if` branch itself is provably dead.
 
 Adjudication reasoning recorded per-finding (from
-`tools_sqc/data/precision_audit/raylib/import_delta_msc24_task540.csv`):
+`aurora-lint/data/precision_audit/raylib/import_delta_msc24_task540.csv`):
 
 ```
 rtext.c,1092,FP,"sprintf() call is inside the #else branch of '#if defined(SUPPORT_COMPRESSED_FONT_ATLAS)',
@@ -143,12 +143,12 @@ rtext.c,1146,FP,"sprintf() call is inside '#if defined(SUPPORT_FONT_DATA_COPY)',
   is commented out ('//#define SUPPORT_FONT_DATA_COPY'), so this branch is dead code never compiled."
 ```
 
-tools_sqc filed this as **task 560** (`todo-sqlite-cli show 560` there), scoped
+aurora-lint filed this as **task 560** (`todo-sqlite-cli show 560` there), scoped
 as: recognize `#ifdef MACRO`/`#if defined(MACRO)` as dead when `MACRO` is
 provably always-defined (unconditional `#define` earlier in file, no matching
 `#undef`) or provably never-defined (commented-out `#define`, or no `#define`
 anywhere in scope). All 14 measured FPs would be eliminated by this fix.
-Current plan on the tools_sqc side is to fix this **locally** in
+Current plan on the aurora-lint side is to fix this **locally** in
 `suppression.rs` first (it's a real, already-measured FP and shouldn't wait on
 cross-repo coordination) — this substrate doc is about *not* duplicating that
 same logic a second time when knots needs it too.
@@ -180,11 +180,11 @@ formatting isn't a scored judgment the way a lint finding or a complexity
 metric is, so dead-region detection has no consumer in moldy. Don't scope
 this work around a third consumer that doesn't exist.
 
-## Reusable pieces already in tools_sqc for the macro-definedness question
+## Reusable pieces already in aurora-lint for the macro-definedness question
 
 Not tree-sitter-based, already plain-regex-over-source-text (same style this
 crate's `suppressions()` uses), in
-`tools_sqc/src/utility/cert_c/ast_utils.rs`:
+`aurora-lint/src/utility/cert_c/ast_utils.rs`:
 
 ```rust
 /// True if `#define name ...` appears anywhere in `source`, regardless of
@@ -230,10 +230,10 @@ scanners disagreeing at edge cases (e.g. a `#if 0` nested inside a dead
 
 ## Open questions for whoever picks this up
 
-- Migration path: does tools_sqc's `compute_dead_code_ranges` get deleted in
+- Migration path: does aurora-lint's `compute_dead_code_ranges` get deleted in
   favor of calling this, or does it stay as a local fallback? (Given the
-  substrate migration precedent in `docs/migration-tools_sqc.md`, likely the
-  former, but that's a tools_sqc-side decision once this exists.)
+  substrate migration precedent in `docs/migration-aurora-lint.md`, likely the
+  former, but that's an aurora-lint-side decision once this exists.)
 - Function-local `#define`/`#undef` (the raylib case is inside a function
   body, not file scope) — confirm the line scanner doesn't need brace/scope
   awareness, since `#define` is lexically file-wide in C regardless of where
@@ -242,5 +242,5 @@ scanners disagreeing at edge cases (e.g. a `#if 0` nested inside a dead
 - Whether `#undef` tracking is worth the complexity for v1, or whether v1
   ships "unconditional `#define` earlier in file, ignore `#undef`" (slightly
   unsound but likely fine in practice — the CLAUDE.md-recorded review process
-  on the tools_sqc side would delta-adjudicate any resulting FPs before
+  on the aurora-lint side would delta-adjudicate any resulting FPs before
   claiming a precision win, so an imperfect v1 isn't silently wrong forever).

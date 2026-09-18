@@ -4,14 +4,14 @@ version = "0.9.0"
 edition = "2021"
 license = "MIT"
 authors = ["Brandon Arrendondo <brandon.arrendondo@bissell.com>"]
-description = "Shared language-parsing substrate for knots, funky, and tools_sqc"
+description = "Shared language-parsing substrate for knots, funky, and aurora-lint"
 repository = "https://github.com/brandon-arrendondo/lang_parsing_substrate"
 readme = "README.md"
 keywords = ["tree-sitter", "parsing", "language-detection", "static-analysis"]
 categories = ["parser-implementations", "development-tools"]
 
 [lib]
-# rlib keeps existing Rust consumers (knots, moldy, tools_sqc) unchanged; cdylib
+# rlib keeps existing Rust consumers (knots, moldy, aurora-lint) unchanged; cdylib
 # is only exercised when maturin builds the `pyo3`-feature wheel.
 crate-type = ["cdylib", "rlib"]
 
