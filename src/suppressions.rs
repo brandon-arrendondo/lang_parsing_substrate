@@ -23,11 +23,11 @@ pub struct Suppression {
     /// the statement being suppressed. `None` if the comment is the last
     /// non-blank content in the file.
     pub target_line: Option<usize>,
-    /// Tool name, e.g. `"knots"`, `"sqc"`, `"funky"`.
+    /// Tool name, e.g. `"knots"`, `"aurora-lint"` (legacy `"sqc"`), `"moldy"`.
     pub tool: String,
     /// Rule or metric ID within that tool, e.g. `"cognitive"`, `"INT30-C"`.
     pub rule: String,
-    /// Truncated SHA-256 tamper-detection hash — required by sqc, unused by
+    /// Truncated SHA-256 tamper-detection hash — required by aurora-lint, unused by
     /// other tools.
     pub hash: Option<String>,
     /// Free-text justification, if present.
