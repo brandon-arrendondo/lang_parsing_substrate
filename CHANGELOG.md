@@ -16,6 +16,32 @@ All notable changes to this crate are documented here.
     a missing or non-regular file. `DEFAULT_PREFIX_LEN` is exported.
   - `PathIgnore(patterns)` with `is_ignored(path)` (the `toolchain.toml`
     `[ignore].paths` matcher). An invalid glob raises `ValueError`.
+- `query`: traversal primitives from aurora-lint's performance work (task 2222).
+  - `walk_preorder(root, visit)` walks a subtree pre-order with ONE `TreeCursor`;
+    `visit` returns `Walk::{Continue, SkipChildren, Stop}`.
+  - `ancestors(root, node)` returns a node's ancestor chain from one root-down
+    descent (`child_with_descendant`). `find_ancestor_from_root`,
+    `nearest_ancestor_of_kind_from_root` and `nearest_ancestor_of_kinds_from_root`
+    build on it at O(depth). `find_ancestor` and friends climb with `parent()`,
+    which tree-sitter answers by re-descending from the root, so they cost
+    O(depth²); they are kept for callers that hold only the node, with the cost
+    documented.
+  - `child_nodes(node)` / `named_child_nodes(node)`: linear child lists from one
+    cursor. `Node::child(i)` walks from the first child, so an index loop over a
+    node's children is O(k²).
+
+### Changed
+
+- Every subtree walk (`find_descendants`, `find_first_descendant`, the call-graph
+  walks in `calls`, the structural hash in `fingerprint`, `looks_like_cpp`,
+  `detect_min_c_standard`) now runs on `walk_preorder`. The old walks created a
+  cursor and a `Vec` per visited node (about 5% of CPU on sqlite's `btree.c` in
+  aurora-lint). Order and results are unchanged. Measured through the Python
+  bindings (best of 5, parse included): `call_edges` on `btree.c` 160 to 137 ms,
+  `function_fingerprints` 110 to 98 ms, and on a 3,000-deep else-if chain 104 to
+  86 ms and 66 to 57 ms.
+- A source-hygiene test (`tests/source_hygiene.rs`) fails on a
+  `for i in 0..n.child_count()` loop that indexes `child(i)` in `src/`.
 
 ## 0.11.0 — 2026-10-06
 

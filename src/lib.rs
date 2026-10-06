@@ -63,8 +63,10 @@ pub use imports::{distinct_import_count, import_sources};
 pub use isr::{interrupt_handlers, InterruptEvidence, InterruptHandler};
 pub use path_ignore::PathIgnore;
 pub use query::{
-    find_ancestor, find_descendants, find_descendants_of_kind, find_descendants_of_kinds,
-    find_first_descendant, nearest_ancestor_of_kind, nearest_ancestor_of_kinds, node_text,
+    ancestors, child_nodes, find_ancestor, find_ancestor_from_root, find_descendants,
+    find_descendants_of_kind, find_descendants_of_kinds, find_first_descendant, named_child_nodes,
+    nearest_ancestor_of_kind, nearest_ancestor_of_kind_from_root, nearest_ancestor_of_kinds,
+    nearest_ancestor_of_kinds_from_root, node_text, walk_preorder, Walk,
 };
 pub use regions::{ignored_regions, IgnoredRegion};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]

@@ -52,20 +52,17 @@ pub enum CStandard {
 /// documentation for what is and isn't treated as a marker, and why.
 pub fn detect_min_c_standard(tree: &Tree, source: &[u8]) -> Option<CStandard> {
     let mut best: Option<CStandard> = None;
-    let mut stack = vec![tree.root_node()];
-    while let Some(node) = stack.pop() {
+    crate::query::walk_preorder(tree.root_node(), |node| {
         if let Some(found) = marker_standard(node, source) {
             if best.is_none_or(|b| found > b) {
                 best = Some(found);
             }
             if best == Some(CStandard::C23) {
-                break;
+                return crate::query::Walk::Stop;
             }
         }
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node.children(&mut cursor).collect();
-        stack.extend(children.into_iter().rev());
-    }
+        crate::query::Walk::Continue
+    });
     best
 }
 

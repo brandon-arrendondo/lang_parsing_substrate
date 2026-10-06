@@ -83,7 +83,7 @@
 //! function's doc comment.
 
 use crate::calls::{get_function_name, is_function_kind};
-use crate::query::find_descendants;
+use crate::query::{find_descendants, walk_preorder, Walk};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tree_sitter::Node;
@@ -355,24 +355,20 @@ pub fn is_block_kind(kind: &str) -> bool {
     )
 }
 
-/// Iterative pre-order walk (explicit stack, matching [`crate::query`]'s
-/// depth-safety rationale — a real-world deeply-nested file must not
-/// overflow the call stack here any more than it does in `find_descendants`)
+/// Iterative pre-order walk ([`walk_preorder`]: one cursor, no call-stack
+/// depth tied to AST nesting, no per-node allocation)
 /// that folds each node's `kind()` and `child_count()` into a single hash,
 /// returning it alongside the subtree's total node count. Also folds in
 /// `root`'s own declared type text, if any (see [`declared_type_text`]).
 fn hash_and_count(root: Node, source: &[u8]) -> (u64, usize) {
     let mut hasher = DefaultHasher::new();
     let mut count = 0usize;
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    walk_preorder(root, |node| {
         count += 1;
         node.kind().hash(&mut hasher);
         node.child_count().hash(&mut hasher);
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node.children(&mut cursor).collect();
-        stack.extend(children.into_iter().rev());
-    }
+        Walk::Continue
+    });
     if let Some(type_text) = declared_type_text(root, source) {
         type_text.hash(&mut hasher);
     }

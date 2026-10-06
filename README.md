@@ -12,7 +12,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 |--------|----------|
 | `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
-| `query` | Iterative (non-recursive) tree-sitter traversal helpers: `find_descendants`, `find_first_descendant`, `node_text`, ancestor lookups |
+| `query` | Iterative tree-sitter traversal: `walk_preorder` (one cursor per walk), `find_descendants`, `find_first_descendant`, root-down ancestor lookups (`ancestors`, `find_ancestor_from_root`), linear `child_nodes`, `node_text` |
 | `flat` | A whole parse tree as flat, index-linked columns (`flatten` → `FlatTree`), so a consumer that cannot hold a `tree_sitter::Node` (Python) can still walk every node |
 | `tsquery` | Run a tree-sitter query and return owned captures (`run_query`), plus each grammar's bundled tags query (`tags_query`) |
 | `imports` | Per-file import/use-statement extraction, for building efferent-coupling (Ce) edges |

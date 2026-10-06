@@ -53,16 +53,16 @@ pub fn looks_like_cpp(source: &[u8]) -> bool {
         return false;
     };
 
-    let mut stack = vec![tree.root_node()];
-    while let Some(node) = stack.pop() {
-        if is_cpp_only_marker(node) {
-            return true;
+    let mut found = false;
+    crate::query::walk_preorder(tree.root_node(), |node| {
+        found = is_cpp_only_marker(node);
+        if found {
+            crate::query::Walk::Stop
+        } else {
+            crate::query::Walk::Continue
         }
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node.children(&mut cursor).collect();
-        stack.extend(children.into_iter().rev());
-    }
-    false
+    });
+    found
 }
 
 /// Node kinds that tree-sitter-cpp 0.23 only produces for constructs with no

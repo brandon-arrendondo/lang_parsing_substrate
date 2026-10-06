@@ -14,7 +14,7 @@
 //! cross-file call graph (deciding which external callee belongs to which
 //! other file) is a per-tool concern, same as `import_sources`.
 
-use crate::query::{find_first_descendant, push_children_reversed};
+use crate::query::{find_first_descendant, walk_preorder, Walk};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -84,18 +84,17 @@ pub fn call_edges(root: Node, source: &str) -> Vec<CallEdge> {
 /// [`crate::query::find_descendants`] documents: this walk's depth is the
 /// AST's own nesting depth, which is unbounded — a corrupted-`#ifdef` parse
 /// reaches thousands of levels — and it runs on worker threads whose stacks
-/// are far smaller than main's. Children are pushed reversed and popped LIFO,
-/// so the visit order is the same pre-order the recursion produced.
+/// are far smaller than main's. [`walk_preorder`] keeps the pre-order the
+/// recursion produced, with one cursor for the whole walk.
 fn collect_functions<'a>(root: Node<'a>, source: &str, out: &mut Vec<(Node<'a>, String)>) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    walk_preorder(root, |node| {
         if is_function_kind(node.kind()) && !is_macro_function_definition(node) {
             if let Some(name) = get_function_name(node, source) {
                 out.push((node, name));
             }
         }
-        push_children_reversed(node, &mut stack);
-    }
+        Walk::Continue
+    });
 }
 
 /// Returns `true` if `kind` is a function-like node this module treats as a
@@ -357,8 +356,7 @@ pub fn collect_local_names(root: Node, source: &str) -> HashSet<String> {
 
 /// Iterative for the reason [`collect_functions`] documents.
 fn collect_local_names_into(root: Node, source: &str, names: &mut HashSet<String>) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    walk_preorder(root, |node| {
         if is_function_kind(node.kind()) {
             if let Some(name) = get_function_name(node, source) {
                 names.insert(name);
@@ -370,8 +368,8 @@ fn collect_local_names_into(root: Node, source: &str, names: &mut HashSet<String
                 }
             }
         }
-        push_children_reversed(node, &mut stack);
-    }
+        Walk::Continue
+    });
 }
 
 fn handle_call_node(
@@ -436,8 +434,18 @@ fn collect_call_names(
     aliases: &HashMap<String, String>,
     out: &mut Vec<String>,
 ) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    walk_preorder(root, |node| {
+        // A pruned nested function is skipped whole: neither it nor its subtree is
+        // visited, exactly as the old worklist never pushed it. The root itself is
+        // always visited.
+        let pruned = stop_at_nested
+            && node != root
+            && is_function_kind(node.kind())
+            && !is_macro_function_definition(node)
+            && !is_error_recovery_debris(node, source);
+        if pruned {
+            return Walk::SkipChildren;
+        }
         if node.kind() == "call_expression"
             || node.kind() == "call"
             || node.kind() == "invocation_expression"
@@ -482,18 +490,8 @@ fn collect_call_names(
                 }
             }
         }
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node
-            .children(&mut cursor)
-            .filter(|child| {
-                !stop_at_nested
-                    || !is_function_kind(child.kind())
-                    || is_macro_function_definition(*child)
-                    || is_error_recovery_debris(*child, source)
-            })
-            .collect();
-        stack.extend(children.into_iter().rev());
-    }
+        Walk::Continue
+    });
 }
 
 /// True when a function-like node's extracted name is actually a bare C/C++
@@ -545,11 +543,10 @@ fn is_c_keyword(name: &str) -> bool {
 /// module's node-kind dispatch).
 ///
 /// Iterative for the reason [`collect_functions`] documents. Pre-order is
-/// what makes a later rebinding assignment overwrite an earlier one, so the
-/// LIFO worklist has to preserve it.
+/// what makes a later rebinding assignment overwrite an earlier one, and
+/// [`walk_preorder`] preserves it.
 fn collect_fn_ptr_aliases(root: Node, source: &str, aliases: &mut HashMap<String, String>) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    walk_preorder(root, |node| {
         match node.kind() {
             "declaration" => {
                 let mut cursor = node.walk();
@@ -593,8 +590,8 @@ fn collect_fn_ptr_aliases(root: Node, source: &str, aliases: &mut HashMap<String
             }
             _ => {}
         }
-        push_children_reversed(node, &mut stack);
-    }
+        Walk::Continue
+    });
 }
 
 /// True when a declarator subtree shapes a function pointer: it contains
