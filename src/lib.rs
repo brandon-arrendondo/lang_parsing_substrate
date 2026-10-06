@@ -12,6 +12,7 @@
 pub mod c_standard;
 pub mod calls;
 pub mod cfg;
+pub mod classify;
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub mod cpp_header;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]
@@ -35,6 +36,10 @@ pub mod suppressions;
 pub use c_standard::{detect_min_c_standard, CStandard};
 pub use calls::{call_edges, collect_local_names, get_function_name, is_function_kind, CallEdge};
 pub use cfg::{build_function_cfg, BasicBlock, BlockId, CfgEdge, FunctionCfg};
+pub use classify::{
+    classify, classify_file, BinaryKind, ClassifyLimits, FileClass, SourceText, TextEncoding,
+    DEFAULT_PREFIX_LEN,
+};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub use cpp_header::looks_like_cpp;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]

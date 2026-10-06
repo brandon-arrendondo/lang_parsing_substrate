@@ -11,6 +11,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | Module | Provides |
 |--------|----------|
 | `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
+| `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative (non-recursive) tree-sitter traversal helpers: `find_descendants`, `find_first_descendant`, `node_text`, ancestor lookups |
 | `imports` | Per-file import/use-statement extraction, for building efferent-coupling (Ce) edges |
 | `calls` | Per-file call-graph edge extraction (`caller` → `callee`), with external-call detection |
@@ -105,6 +106,32 @@ Grammar crates are re-exported so consumers reach them transitively:
 use lang_parsing_substrate::tree_sitter_rust;
 ```
 
+### Early exit before parsing
+
+`language_for_file` trusts the extension. To skip archives, executables,
+images and oversized files before they reach tree-sitter, classify first —
+it reads only a bounded prefix, never the whole file:
+
+```rust
+use lang_parsing_substrate::{classify_file, ClassifyLimits, FileClass};
+
+// The size limit is the caller's policy; the default is no limit.
+let limits = ClassifyLimits { max_size: Some(16 << 20), ..Default::default() };
+match classify_file(path, &limits)? {
+    FileClass::SourceText(_) => { /* parse it */ }
+    FileClass::Binary { kind, mime } => { /* skip-and-report, or try anyway */ }
+    FileClass::Oversize { size, limit } => { /* caller's call */ }
+    _ => { /* Empty, or a future variant */ }
+}
+```
+
+The result is a heuristic and can be wrong in both directions (see the
+`classify` module docs). Magic numbers come from the dependency-free
+[`infer`](https://crates.io/crates/infer) crate. Short ASCII-looking
+signatures such as `MZ` or `BM` only count when the bytes also look binary.
+`classify(path, prefix, size, &limits)` is the I/O-free core, for callers
+that have already read the bytes.
+
 ### Analysis primitives
 
 ```rust
@@ -133,6 +160,7 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `language_for_file(path: &Path) -> Option<Language>` — grammar dispatch by extension
 - `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key
 - `language_info_for_file(path: &Path) -> Option<&'static LanguageInfo>`
+- `classify` / `classify_file` / `FileClass` / `BinaryKind` / `TextEncoding` / `SourceText` / `ClassifyLimits` — heuristic pre-parse file classification (`classify`)
 - `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates
 - `supported_languages_report() -> String` — human-readable language summary
 - `LanguageInfo` / `SlocMode` — registry metadata and comment-style enum (drives SLOC calculation)
