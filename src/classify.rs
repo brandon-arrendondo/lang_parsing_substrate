@@ -21,8 +21,45 @@
 //! A text file can be called binary (e.g. a source file with a run of
 //! embedded NUL bytes, or UTF-16 without a BOM), and a binary file can be
 //! called text (e.g. a format with no magic number `infer` knows and
-//! mostly-ASCII content, or a tiny PDF with no binary streams). Treat the result as a cheap early-exit
-//! signal, not a verdict.
+//! mostly-ASCII content). Treat the result as a cheap early-exit signal, not
+//! a verdict.
+//!
+//! ## Known limitations
+//!
+//! - **Prefix only.** Only the first `prefix_len` bytes are inspected. A text
+//!   header followed by binary data later in the file (or vice versa) is
+//!   classified by the header alone.
+//! - **The thresholds are reasoned, not measured.** The NUL (0.1%), control
+//!   byte (5%) and invalid-UTF-8 (30%) cut-offs come from the statistics of
+//!   uniform random data versus source text. They have not been calibrated
+//!   against a real corpus of consumer inputs.
+//! - **BOM-less UTF-16 is `Binary`.** Every other byte is NUL.
+//! - **UTF-32 is `Binary`.** There is no UTF-32 variant. Its BOMs
+//!   (`FF FE 00 00`, `00 00 FE FF`) are deliberately not read as UTF-16, so
+//!   the NUL ratio decides.
+//! - **A UTF-16 BOM skips the byte statistics.** Any file starting with
+//!   `FF FE` or `FE FF` (and no strong magic number) is `SourceText`, even
+//!   if what follows is not text.
+//! - **`Latin1` means "not UTF-8", not "ISO-8859-1".** Windows-1252, other
+//!   ISO-8859 parts, and multi-byte legacy encodings (GBK, Shift-JIS, EUC-KR)
+//!   all report `Latin1`. EBCDIC is not recognised at all.
+//! - **Weak signatures need binary-looking bytes.** A binary format whose
+//!   `infer` signature is short and ASCII-like (`MZ`, `BM`, `GIF`, `%!`,
+//!   `ustar` at 257, `%PDF-` not at offset 0, …) and whose prefix is also
+//!   text-like (e.g. a tiny uncompressed PDF) is reported as `SourceText`.
+//! - **`infer` decides the kind and MIME by first match.** Without its `std`
+//!   feature (which this crate leaves off, to avoid the `cfb` dependency) every
+//!   OLE2 compound file — `.doc`, `.xls`, `.ppt`, `.msi` — reports as
+//!   `Document` / `"application/msword"`. Report `mime` as-is; it is not a
+//!   stable identifier and may change with `infer` upgrades.
+//! - **`Oversize` applies to text only.** A binary file is `Binary` at any
+//!   size, and an empty file is `Empty` even if the limit is 0.
+//! - **`classify_file` follows symlinks** and checks the size before reading,
+//!   so a file that grows or shrinks between the two calls is classified with
+//!   a stale size.
+//! - **Language hints are shallow.** Only `#!` interpreters and a leading
+//!   `<?php` are recognised. There is no content-based C-vs-C++ sniff for
+//!   `.h` here (see below).
 //!
 //! The substrate deliberately sets **no policy**: whether a `Binary` or
 //! `Oversize` result means "skip and report" or "try anyway" is the caller's
@@ -211,7 +248,9 @@ pub fn classify(path: &Path, prefix: &[u8], file_size: u64, limits: &ClassifyLim
     let truncated = (prefix.len() as u64) < file_size;
     let (encoding, body) = if let Some(rest) = prefix.strip_prefix(b"\xEF\xBB\xBF") {
         (TextEncoding::Utf8Bom, rest)
-    } else if prefix.starts_with(b"\xFF\xFE") {
+    } else if prefix.starts_with(b"\xFF\xFE") && !prefix.starts_with(b"\xFF\xFE\0\0") {
+        // `FF FE 00 00` is the UTF-32 LE BOM, not UTF-16 LE + U+0000; it
+        // falls through to the byte statistics (see "Known limitations").
         (TextEncoding::Utf16Le, &[][..])
     } else if prefix.starts_with(b"\xFE\xFF") {
         (TextEncoding::Utf16Be, &[][..])
@@ -668,6 +707,15 @@ mod tests {
         assert_eq!(t.encoding, TextEncoding::Utf16Le);
         let t = text("w.c", b"\xFE\xFF\0i\0n\0t");
         assert_eq!(t.encoding, TextEncoding::Utf16Be);
+        // UTF-32 LE/BE BOMs are not mistaken for UTF-16; the NULs decide.
+        assert_eq!(
+            binary_kind("w.c", b"\xFF\xFE\0\0i\0\0\0n\0\0\0t\0\0\0"),
+            Some(BinaryKind::Unknown)
+        );
+        assert_eq!(
+            binary_kind("w.c", b"\0\0\xFE\xFF\0\0\0i\0\0\0n\0\0\0t"),
+            Some(BinaryKind::Unknown)
+        );
         // BOM-less UTF-16 is a known false "binary".
         assert_eq!(
             binary_kind("w.c", b"i\0n\0t\0 \0x\0;\0"),

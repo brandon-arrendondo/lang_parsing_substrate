@@ -4,6 +4,12 @@ All notable changes to this crate are documented here.
 
 ## Unreleased
 
+### Changed
+
+- `Cargo.toml` description and the `Suppression::tool` / `hash` doc comments
+  now name the current consumers: moldy (replaced funky), aurora-lint
+  (formerly sqc / tools_sqc), and clew.
+
 ### Added
 
 - `classify` module: cheap, **heuristic** pre-parse file classification so
@@ -25,5 +31,10 @@ All notable changes to this crate are documented here.
   - Language hints: `SourceText::by_extension` (registry) and `by_content`
     (shebang / `<?php`), with `likely_language()` and `extension_agrees()`.
     These are hints only and never gate the result.
+  - Known limitations are listed in the `classify` module docs. Among them:
+    the decision uses the prefix only, the thresholds were reasoned rather
+    than measured on a corpus, BOM-less UTF-16 and all UTF-32 come back as
+    `Binary`, and without `infer`'s `std` feature every OLE2 file reports as
+    `Document`.
   - No policy is built in. The caller sets the size limit (default: none) and
     decides what to do with `Binary` and `Oversize`.
