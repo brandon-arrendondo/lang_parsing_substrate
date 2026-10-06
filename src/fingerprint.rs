@@ -45,8 +45,7 @@
 //! `name`, so a consumer can report a match either as "function X duplicates
 //! function Y" (the name) or as "path:40-58 duplicates path:12-30" (the line
 //! range) purely from data already on this type — no substrate change is
-//! needed for that choice; it's a per-consumer reporting decision (see
-//! `DETECT_FINE_GRAINED_DUPLICATES.md`, Ask 1).
+//! needed for that choice; it's a per-consumer reporting decision.
 //!
 //! ## Granularity tiers ([`FingerprintTier`])
 //!
@@ -57,8 +56,7 @@
 //! `Block` exists for a narrower use case than corpus-wide clone detection:
 //! a caller that already has one flagged region (e.g. an aurora-lint violation)
 //! and wants to search the corpus for other structurally similar regions,
-//! not just whole-function duplicates (`DETECT_FINE_GRAINED_DUPLICATES.md`,
-//! Ask 2). No new search primitive is needed for that: fingerprint the
+//! not just whole-function duplicates. No new search primitive is needed for that: fingerprint the
 //! flagged node directly with [`structural_hash`] (already possible on any
 //! node), then look it up against a corpus's `Block`-tier fingerprints the
 //! same way [`duplicate_groups`] already groups by hash — either run the
@@ -592,7 +590,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-c")]
     fn block_tier_finds_match_between_non_duplicate_functions() {
-        // The driving use case from DETECT_FINE_GRAINED_DUPLICATES.md: two
+        // The driving use case for the Block tier: two
         // *whole functions* that are structurally unrelated (different
         // statements before/after, different return type) share one
         // identical `for` loop. Only Block-tier fingerprinting surfaces that

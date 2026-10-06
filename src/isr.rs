@@ -4,15 +4,15 @@
 //! syntactic evidence** of being an interrupt/ISR handler — a GNU
 //! `__attribute__((interrupt))`/`__attribute__((interrupt("...")))`, a C23
 //! `[[gnu::interrupt]]`-style attribute, or an AVR-libc-style
-//! `ISR(vector) { ... }` macro invocation. See this repo's
-//! `ISR_DETECTION.md` for the full design handoff and the tree-sitter-c
-//! 0.24.2 probe output each evidence shape was verified against.
+//! `ISR(vector) { ... }` macro invocation. Each evidence shape was verified
+//! against `tree-sitter-c` 0.24.2's actual parse output when this module was
+//! written.
 //!
 //! Deliberately **not** a name-substring heuristic (`isr`/`irq`/`interrupt`
-//! in the function name): a real-world firmware audit (see
-//! `ISR_DETECTION.md`'s "Catapult" section) found that name-matching alone
-//! produced ~76-80% false positives, including a plain main-loop function
-//! named `DEV_APPROX_IRQProcess`. No name-based fallback is offered here —
+//! in the function name): an audit of a real-world embedded firmware
+//! codebase found that name-matching alone produced ~76-80% false
+//! positives, including a plain main-loop function whose name merely
+//! contained `IRQ`. No name-based fallback is offered here —
 //! callers wanting that heuristic as a separate, lower-confidence signal
 //! should implement it themselves.
 //!
@@ -26,8 +26,7 @@
 //! Vendor keyword-style annotations (IAR's `#pragma vector=` + `__interrupt`,
 //! Keil's `__irq`) are a documented gap, not covered: both produce an
 //! `ERROR` node under `tree-sitter-c` 0.24.2, and IAR's pragma has no AST
-//! link to the function it annotates (positional/textual only) — see
-//! `ISR_DETECTION.md` for the verification.
+//! link to the function it annotates (positional/textual only).
 
 use crate::calls::get_function_name;
 use crate::query::{find_descendants_of_kind, find_first_descendant, node_text};
@@ -107,7 +106,7 @@ pub fn interrupt_handlers<'a>(root: Node<'a>, source: &str) -> Vec<InterruptHand
 /// Checks `func`'s direct children for a GNU `attribute_specifier` or a C23
 /// `attribute_declaration` naming the `interrupt` attribute. Both syntaxes
 /// attach as a direct child of `function_definition` (verified against
-/// `tree-sitter-c` 0.24.2 — see `ISR_DETECTION.md`), not a deeper descendant,
+/// `tree-sitter-c` 0.24.2), not a deeper descendant,
 /// so this deliberately does not recurse past `func`'s immediate children.
 fn attribute_evidence(func: Node, source: &str) -> Option<InterruptEvidence> {
     let mut cursor = func.walk();
@@ -185,9 +184,8 @@ fn c23_attribute_evidence(attr_decl: Node, source: &str) -> Option<InterruptEvid
 /// (`SOMENAME(args) { body }` — its `declarator` is a
 /// `parenthesized_declarator`, not a `function_declarator`). Mirrors
 /// `calls.rs`'s private `is_macro_function_definition`, which uses this same
-/// shape to *exclude* such definitions from the call graph — see this
-/// module's docs and `ISR_DETECTION.md`'s "Cross-cutting note" for why that
-/// exclusion means an `ISR(vector) { ... }` handler's own calls are
+/// shape to *exclude* such definitions from the call graph. A consequence of
+/// that exclusion: an `ISR(vector) { ... }` handler's own calls are
 /// currently invisible to `call_edges`.
 fn macro_evidence(func: Node, source: &str) -> Option<InterruptEvidence> {
     let declarator = func.child_by_field_name("declarator")?;
@@ -283,11 +281,11 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-c")]
     fn bare_isr_ish_name_with_no_marking_is_not_detected() {
-        // Regression for the Catapult DEV_APPROX_IRQProcess failure mode:
-        // an ISR-ish *name* with zero attribute/macro evidence must not be
+        // Regression for a failure mode seen in real firmware: an ISR-ish
+        // *name* with zero attribute/macro evidence must not be
         // reported. This is the whole reason this module exists instead of
         // a name-substring regex.
-        let source = "void DEV_APPROX_IRQProcess(void) {\n    poll();\n}\n";
+        let source = "void DEV_Sensor_IRQProcess(void) {\n    poll();\n}\n";
         let tree = parse_c(source);
         assert!(interrupt_handlers(tree.root_node(), source).is_empty());
     }

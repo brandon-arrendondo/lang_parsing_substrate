@@ -8,9 +8,8 @@
 //! grammar dependency either way.
 //!
 //! Computes the 1-based inclusive line ranges of a C/C++ translation unit
-//! that a preprocessor would strip before the compiler ever sees them. See
-//! this repo's `DETECT_DEAD_CODE_REGIONS.md` for the full design handoff;
-//! this module covers both sub-problems from that doc in one pass, sharing a
+//! that a preprocessor would strip before the compiler ever sees them. This
+//! module covers two sub-problems in one pass, sharing a
 //! single nesting/depth state machine so they don't disagree at edge cases
 //! (e.g. a `#if 0` nested inside a dead `#ifdef MACRO` region, or vice
 //! versa):
@@ -713,7 +712,7 @@ mod tests {
             .collect()
     }
 
-    // hostap's src/utils/common.h shape (RESOLVE_CONDITIONAL_TYPEDEFS.md):
+    // hostap's src/utils/common.h shape:
     // an #ifdef on a macro the file never itself defines is Neutral without
     // an assumption, but resolves once the caller supplies one.
     #[test]
