@@ -73,7 +73,9 @@ fn extract(node: Node, source: &[u8], key: &str, out: &mut Vec<String>) {
         "c" | "cpp" => extract_preproc_include(node, source, out),
         "rust" => extract_rust(node, source, out),
         "python" => extract_python(node, source, out),
-        "javascript" | "typescript" => extract_js_like(node, source, out),
+        // `tsx` is TypeScript parsed with the JSX-aware grammar; its imports are
+        // spelled the same.
+        "javascript" | "typescript" | "tsx" => extract_js_like(node, source, out),
         "go" => extract_go(node, source, out),
         "java" => extract_java(node, source, out),
         "csharp" => extract_csharp(node, source, out),

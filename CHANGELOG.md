@@ -2,6 +2,50 @@
 
 All notable changes to this crate are documented here.
 
+## 0.11.0 — unreleased
+
+### Added
+
+- `flat` module: `flatten(&Tree) -> FlatTree` copies every node of a tree into
+  parallel `u32` columns: kind and field (indexing `kinds` / `fields` string
+  tables, field 0 = none), flags (named, error, missing, extra, has_error),
+  parent / first_child / next_sibling / prev_sibling links (`NONE` when
+  absent), byte offsets, (row, column) points, and a `child_offset` /
+  `child_list` index giving each node's children as one slice. Rows are
+  pre-order with the root at 0. The walk is iterative.
+- Python binding `parse_tree(language_key, source: bytes) -> FlatTree`, with
+  each column returned as `bytes` for `memoryview(...).cast("I")`, and
+  `lang_parsing_substrate.NONE`. This lets a Python consumer walk the full tree
+  without its own tree-sitter grammar packages. clew uses it to parse Python
+  and Rust.
+- `FlatTree.root_node` returns a native `Node` that answers the walking subset of
+  py-tree-sitter's `Node` API: `type`, `children`, `named_children`,
+  `child_by_field_name`, `children_by_field_name`, `parent`, the (named) sibling
+  links, `start_byte` / `end_byte`, `start_point` / `end_point`, `text`, `id`,
+  `child_count`, `named_child_count`, and the `is_named` / `is_error` /
+  `is_missing` / `is_extra` / `has_error` flags. Existing py-tree-sitter walkers
+  run on it unchanged. A Python wrapper over the columns measured 1.7-2.3x
+  slower than py-tree-sitter on clew's harvest. The native node brings a whole
+  clew build to within about 3% of py-tree-sitter, with byte-identical output.
+  `FlatTree.source` returns the parsed bytes.
+- `tsquery` module: `run_query(&Language, Node, &[u8], &str)` returns owned
+  `Capture`s (pattern index, capture name, kind, byte range, start/end
+  points), applying the standard predicates. `tags_query(key)` returns the
+  grammar's bundled tags query for c, cpp, python, rust and javascript, and for
+  `typescript` / `tsx` the JavaScript query followed by TypeScript's, since
+  TypeScript's alone has no functions or classes. tree-sitter-tags directives
+  (`#strip!`, `#select-adjacent!`) are not applied.
+- Python bindings `query(language_key, source, query) -> list[Capture]` (raises
+  `ValueError` when the query does not compile) and `tags_query(language_key)`.
+
+### Fixed
+
+- `"tsx"`: `import_sources` returned nothing for it (only `javascript` and
+  `typescript` were matched), and `suppressions` / `ignored_regions` raised
+  `ValueError`, because their comment style is looked up by `LanguageInfo`
+  key and `.tsx` is filed under `typescript`. Both now treat `tsx` as
+  TypeScript.
+
 ## 0.10.0 — 2026-10-06
 
 ### Changed

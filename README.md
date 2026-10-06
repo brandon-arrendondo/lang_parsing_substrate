@@ -13,6 +13,8 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative (non-recursive) tree-sitter traversal helpers: `find_descendants`, `find_first_descendant`, `node_text`, ancestor lookups |
+| `flat` | A whole parse tree as flat, index-linked columns (`flatten` → `FlatTree`), so a consumer that cannot hold a `tree_sitter::Node` (Python) can still walk every node |
+| `tsquery` | Run a tree-sitter query and return owned captures (`run_query`), plus each grammar's bundled tags query (`tags_query`) |
 | `imports` | Per-file import/use-statement extraction, for building efferent-coupling (Ce) edges |
 | `calls` | Per-file call-graph edge extraction (`caller` → `callee`), with external-call detection |
 | `cfg` | Control-flow graph / basic-block construction for a function body (`c`, `cpp`, `rust`) |
@@ -168,6 +170,8 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `supported_languages_report() -> String` — human-readable language summary
 - `LanguageInfo` / `SlocMode` — registry metadata and comment-style enum (drives SLOC calculation)
 - `find_descendants` / `find_first_descendant` / `find_ancestor` / `node_text` and friends — traversal helpers (`query`)
+- `flatten` / `FlatTree` — a whole tree as flat columns (`flat`)
+- `run_query` / `Capture` / `tags_query` — tree-sitter queries and bundled tags queries (`tsquery`)
 - `import_sources` / `distinct_import_count` — import extraction (`imports`)
 - `call_edges` / `CallEdge` / `is_function_kind` / `get_function_name` — call-graph extraction (`calls`)
 - `build_function_cfg` / `FunctionCfg` / `BasicBlock` / `CfgEdge` — control-flow graphs (`cfg`)
@@ -217,6 +221,9 @@ src = "fn helper(x: i32) -> i32 { x + 1 }\nfn main() { helper(41); }\n"
 edges = lps.call_edges("rust", src)          # [CallEdge(caller='main', callee='helper', ...)]
 cfg = lps.function_cfg("rust", src, "main")  # FunctionCfg | None
 fps = lps.function_fingerprints("rust", src, min_nodes=1)
+caps = lps.query("rust", src, "(function_item name: (identifier) @name)")  # [Capture]
+tags = lps.tags_query("tsx")                 # the grammar's bundled tags query, or None
+tree = lps.parse_tree("rust", src.encode())  # FlatTree: every node as columns
 ```
 
 Python can't hand this crate a `tree_sitter::Node`/`Tree` directly — this
@@ -224,10 +231,22 @@ crate's `tree-sitter` version has no ABI relationship to tree-sitter's own,
 separate Python bindings — so every bound function takes `(language_key,
 source)`, parses internally, and returns owned data (`CallEdge`,
 `FunctionCfg`, `Fingerprint`, `Suppression`, `IgnoredRegion`, `LanguageInfo`,
-all plain attribute-holding classes). A consumer that also needs to walk the
-tree itself (e.g. for domain-specific semantics this crate doesn't model)
-still parses separately with a language-specific tree-sitter Python package;
-the bindings here only cover the substrate's own primitives.
+`Capture`, `FlatTree`, all plain attribute-holding classes).
+
+A consumer that walks the tree itself (e.g. for domain-specific semantics this
+crate doesn't model) uses `parse_tree`. It returns every node, named or not, in
+pre-order (row 0 is the root). Each column (`kind`, `field`, `flags`, `parent`,
+`first_child`, `next_sibling`, `prev_sibling`, `start_byte`, `end_byte`,
+`start_row`, `start_col`, `end_row`, `end_col`, `child_offset`, `child_list`)
+is native-endian `u32` `bytes`, so `memoryview(tree.kind).cast("I")[i]` is node
+`i`'s kind. `kind` and `field` index into the `kinds` / `fields` string tables,
+and links are `lps.NONE` when absent. A node's children are
+`child_list[child_offset[i]:child_offset[i + 1]]`. `tree.root_node` returns a
+native `Node` that answers the walking subset of py-tree-sitter's `Node` API
+(`type`, `children`, `child_by_field_name`, `parent`, siblings, positions,
+`text`, `id`, error flags), so a walker written for py-tree-sitter runs on it
+unchanged. clew parses Python and Rust this way. `parse_tree`, `query` and `function_cfg` also accept
+`"tsx"` for the JSX-aware TypeScript grammar.
 
 `invoke build-wheel` builds the wheel locally for testing. The actual PyPI
 release happens in CI on a `vX.Y.Z` tag push, via Trusted Publishing (OIDC,

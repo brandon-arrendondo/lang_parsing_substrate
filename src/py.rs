@@ -5,9 +5,9 @@
 //! parses internally, walks the tree, and returns only owned data.
 //!
 //! Consumers that need the tree itself for their own semantic walks (e.g.
-//! clew's thread/lock harvesting) still parse with a language-specific
-//! tree-sitter Python package directly — this module only exposes the
-//! substrate's language-agnostic analysis primitives.
+//! clew's thread/lock harvesting) call `parse_tree`, which returns every node
+//! as flat columns ([`crate::flat`]) they can wrap in their own node type. The
+//! rest of this module exposes the substrate's analysis primitives.
 //!
 //! `useless_conversion` is allowed crate-wide-in-this-module: pyo3 0.22's
 //! `#[pyfunction]` expansion applies a `?`/`From<PyErr>` conversion clippy
@@ -17,6 +17,8 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyString};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tree_sitter::Parser;
 
 use crate::calls;
@@ -25,6 +27,7 @@ use crate::cfg;
 use crate::cfg::{BasicBlock, CfgEdge, FunctionCfg};
 use crate::fingerprint;
 use crate::fingerprint::Fingerprint;
+use crate::flat::{self, FlatTree};
 use crate::imports;
 use crate::regions;
 use crate::regions::IgnoredRegion;
@@ -32,6 +35,7 @@ use crate::registry;
 use crate::registry::LanguageInfo;
 use crate::suppressions as suppressions_mod;
 use crate::suppressions::Suppression;
+use crate::tsquery::{self, Capture};
 
 fn parse(language_key: &str, source: &[u8]) -> PyResult<tree_sitter::Tree> {
     let language = registry::language_for_key(language_key)
@@ -46,9 +50,16 @@ fn parse(language_key: &str, source: &[u8]) -> PyResult<tree_sitter::Tree> {
 }
 
 fn sloc_mode_for_key(language_key: &str) -> PyResult<registry::SlocMode> {
+    // `tsx` is a grammar key (`language_for_key`) but not a `LanguageInfo` key:
+    // the registry files `.tsx` under `typescript`, whose comment syntax it shares.
+    let info_key = if language_key == "tsx" {
+        "typescript"
+    } else {
+        language_key
+    };
     registry::languages()
         .iter()
-        .find(|l| l.key == language_key)
+        .find(|l| l.key == info_key)
         .map(|l| l.sloc_mode)
         .ok_or_else(|| PyValueError::new_err(format!("unknown language key: {language_key}")))
 }
@@ -243,6 +254,403 @@ impl From<IgnoredRegion> for PyIgnoredRegion {
     }
 }
 
+/// Every node of a parsed file as parallel columns: see [`crate::flat`].
+/// Each column getter returns native-endian `u32`s as `bytes`, for
+/// `memoryview(col).cast("I")`; links use `NONE` (`0xFFFF_FFFF`).
+///
+/// `root_node` returns a [`PyNode`]: a py-tree-sitter-compatible node over the
+/// same columns, implemented here so walking it costs what walking a
+/// py-tree-sitter tree costs. A wrapper written in Python over the columns
+/// measured 1.7-2.3x slower on clew's harvest.
+#[pyclass(name = "FlatTree", frozen)]
+struct PyFlatTree {
+    inner: FlatTree,
+    source: Py<PyBytes>,
+    /// One interned Python string per kind, so `Node.type` allocates nothing.
+    kind_strs: Vec<Py<PyString>>,
+    /// Folded into `Node.id` so ids from two trees never collide.
+    serial: u64,
+}
+
+static TREE_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+/// One node of a [`PyFlatTree`]. Answers the subset of py-tree-sitter's `Node`
+/// API a tree walker needs: `type`, `children`, `named_children`,
+/// `child_by_field_name`, `children_by_field_name`, `parent`, the sibling
+/// links, byte and point positions, `text`, `id` and the error flags.
+#[pyclass(name = "Node", frozen)]
+struct PyNode {
+    tree: Py<PyFlatTree>,
+    row: u32,
+}
+
+impl PyNode {
+    fn t(&self) -> &PyFlatTree {
+        self.tree.get()
+    }
+
+    fn at(&self, py: Python<'_>, row: u32) -> Option<PyNode> {
+        (row != flat::NONE).then(|| PyNode {
+            tree: self.tree.clone_ref(py),
+            row,
+        })
+    }
+
+    fn i(&self) -> usize {
+        self.row as usize
+    }
+
+    fn child_rows(&self) -> &[u32] {
+        let f = &self.t().inner;
+        let (lo, hi) = (f.child_offset[self.i()], f.child_offset[self.i() + 1]);
+        &f.child_list[lo as usize..hi as usize]
+    }
+
+    fn flag(&self, bit: u32) -> bool {
+        self.t().inner.flags[self.i()] & bit != 0
+    }
+
+    fn field_id(&self, name: &str) -> Option<u32> {
+        let fields = &self.t().inner.fields;
+        fields
+            .iter()
+            .skip(1)
+            .position(|f| f == name)
+            .map(|p| (p + 1) as u32)
+    }
+
+    fn step_named(&self, links: &[u32]) -> u32 {
+        let flags = &self.t().inner.flags;
+        let mut row = links[self.i()];
+        while row != flat::NONE && flags[row as usize] & flat::FLAG_NAMED == 0 {
+            row = links[row as usize];
+        }
+        row
+    }
+}
+
+#[pymethods]
+impl PyNode {
+    #[getter(r#type)]
+    fn kind(&self, py: Python<'_>) -> Py<PyString> {
+        self.t().kind_strs[self.t().inner.kind[self.i()] as usize].clone_ref(py)
+    }
+
+    #[getter]
+    fn id(&self) -> u64 {
+        self.t().serial << 32 | u64::from(self.row)
+    }
+
+    #[getter]
+    fn start_byte(&self) -> u32 {
+        self.t().inner.start_byte[self.i()]
+    }
+
+    #[getter]
+    fn end_byte(&self) -> u32 {
+        self.t().inner.end_byte[self.i()]
+    }
+
+    #[getter]
+    fn start_point(&self) -> (u32, u32) {
+        let f = &self.t().inner;
+        (f.start_row[self.i()], f.start_col[self.i()])
+    }
+
+    #[getter]
+    fn end_point(&self) -> (u32, u32) {
+        let f = &self.t().inner;
+        (f.end_row[self.i()], f.end_col[self.i()])
+    }
+
+    #[getter]
+    fn text<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        let source = self.t().source.as_bytes(py);
+        let (s, e) = (self.start_byte() as usize, self.end_byte() as usize);
+        PyBytes::new_bound(py, &source[s.min(source.len())..e.min(source.len())])
+    }
+
+    #[getter]
+    fn is_named(&self) -> bool {
+        self.flag(flat::FLAG_NAMED)
+    }
+
+    #[getter]
+    fn is_error(&self) -> bool {
+        self.flag(flat::FLAG_ERROR)
+    }
+
+    #[getter]
+    fn is_missing(&self) -> bool {
+        self.flag(flat::FLAG_MISSING)
+    }
+
+    #[getter]
+    fn is_extra(&self) -> bool {
+        self.flag(flat::FLAG_EXTRA)
+    }
+
+    #[getter]
+    fn has_error(&self) -> bool {
+        self.flag(flat::FLAG_HAS_ERROR)
+    }
+
+    #[getter]
+    fn parent(&self, py: Python<'_>) -> Option<PyNode> {
+        self.at(py, self.t().inner.parent[self.i()])
+    }
+
+    #[getter]
+    fn prev_sibling(&self, py: Python<'_>) -> Option<PyNode> {
+        self.at(py, self.t().inner.prev_sibling[self.i()])
+    }
+
+    #[getter]
+    fn next_sibling(&self, py: Python<'_>) -> Option<PyNode> {
+        self.at(py, self.t().inner.next_sibling[self.i()])
+    }
+
+    #[getter]
+    fn prev_named_sibling(&self, py: Python<'_>) -> Option<PyNode> {
+        self.at(py, self.step_named(&self.t().inner.prev_sibling))
+    }
+
+    #[getter]
+    fn next_named_sibling(&self, py: Python<'_>) -> Option<PyNode> {
+        self.at(py, self.step_named(&self.t().inner.next_sibling))
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> Vec<PyNode> {
+        self.child_rows()
+            .iter()
+            .filter_map(|&r| self.at(py, r))
+            .collect()
+    }
+
+    #[getter]
+    fn named_children(&self, py: Python<'_>) -> Vec<PyNode> {
+        let flags = &self.t().inner.flags;
+        self.child_rows()
+            .iter()
+            .filter(|&&r| flags[r as usize] & flat::FLAG_NAMED != 0)
+            .filter_map(|&r| self.at(py, r))
+            .collect()
+    }
+
+    #[getter]
+    fn child_count(&self) -> usize {
+        self.child_rows().len()
+    }
+
+    #[getter]
+    fn named_child_count(&self) -> usize {
+        let flags = &self.t().inner.flags;
+        self.child_rows()
+            .iter()
+            .filter(|&&r| flags[r as usize] & flat::FLAG_NAMED != 0)
+            .count()
+    }
+
+    fn child_by_field_name(&self, py: Python<'_>, name: &str) -> Option<PyNode> {
+        let id = self.field_id(name)?;
+        let field = &self.t().inner.field;
+        let row = *self
+            .child_rows()
+            .iter()
+            .find(|&&r| field[r as usize] == id)?;
+        self.at(py, row)
+    }
+
+    fn children_by_field_name(&self, py: Python<'_>, name: &str) -> Vec<PyNode> {
+        let Some(id) = self.field_id(name) else {
+            return Vec::new();
+        };
+        let field = &self.t().inner.field;
+        self.child_rows()
+            .iter()
+            .filter(|&&r| field[r as usize] == id)
+            .filter_map(|&r| self.at(py, r))
+            .collect()
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other
+            .downcast::<PyNode>()
+            .is_ok_and(|o| o.get().row == self.row && o.get().tree.is(&self.tree))
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.id()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let (s, e) = (self.start_point(), self.end_point());
+        format!(
+            "<Node type={}, start_point=({}, {}), end_point=({}, {})>",
+            self.kind(py),
+            s.0,
+            s.1,
+            e.0,
+            e.1
+        )
+    }
+}
+
+fn column<'py>(py: Python<'py>, values: &[u32]) -> Bound<'py, PyBytes> {
+    let mut bytes = Vec::with_capacity(values.len() * 4);
+    for v in values {
+        bytes.extend_from_slice(&v.to_ne_bytes());
+    }
+    PyBytes::new_bound(py, &bytes)
+}
+
+#[pymethods]
+impl PyFlatTree {
+    /// Number of nodes. Row 0 is the root.
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// The root node (row 0).
+    #[getter]
+    fn root_node(slf: &Bound<'_, Self>) -> PyNode {
+        PyNode {
+            tree: slf.clone().unbind(),
+            row: 0,
+        }
+    }
+
+    /// The source bytes the tree was parsed from.
+    #[getter]
+    fn source(&self, py: Python<'_>) -> Py<PyBytes> {
+        self.source.clone_ref(py)
+    }
+
+    /// Node-kind names, indexed by the `kind` column.
+    #[getter]
+    fn kinds(&self) -> Vec<String> {
+        self.inner.kinds.clone()
+    }
+
+    /// Field names, indexed by the `field` column; index 0 is `""` (no field).
+    #[getter]
+    fn fields(&self) -> Vec<String> {
+        self.inner.fields.clone()
+    }
+
+    #[getter]
+    fn kind<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.kind)
+    }
+
+    #[getter]
+    fn field<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.field)
+    }
+
+    /// `FLAG_*` bits: 1 named, 2 error, 4 missing, 8 extra, 16 has_error.
+    #[getter]
+    fn flags<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.flags)
+    }
+
+    #[getter]
+    fn parent<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.parent)
+    }
+
+    #[getter]
+    fn first_child<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.first_child)
+    }
+
+    #[getter]
+    fn next_sibling<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.next_sibling)
+    }
+
+    #[getter]
+    fn prev_sibling<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.prev_sibling)
+    }
+
+    #[getter]
+    fn start_byte<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.start_byte)
+    }
+
+    #[getter]
+    fn end_byte<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.end_byte)
+    }
+
+    #[getter]
+    fn start_row<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.start_row)
+    }
+
+    #[getter]
+    fn start_col<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.start_col)
+    }
+
+    #[getter]
+    fn end_row<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.end_row)
+    }
+
+    #[getter]
+    fn end_col<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.end_col)
+    }
+
+    /// `len + 1` offsets into `child_list`: row `i`'s children are
+    /// `child_list[child_offset[i]:child_offset[i + 1]]`.
+    #[getter]
+    fn child_offset<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.child_offset)
+    }
+
+    #[getter]
+    fn child_list<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        column(py, &self.inner.child_list)
+    }
+}
+
+#[pyclass(name = "Capture")]
+#[derive(Clone)]
+struct PyCapture {
+    #[pyo3(get)]
+    pattern_index: usize,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    kind: &'static str,
+    #[pyo3(get)]
+    start_byte: usize,
+    #[pyo3(get)]
+    end_byte: usize,
+    #[pyo3(get)]
+    start_point: (usize, usize),
+    #[pyo3(get)]
+    end_point: (usize, usize),
+}
+
+impl From<Capture> for PyCapture {
+    fn from(c: Capture) -> Self {
+        Self {
+            pattern_index: c.pattern_index,
+            name: c.name,
+            kind: c.kind,
+            start_byte: c.start_byte,
+            end_byte: c.end_byte,
+            start_point: c.start_point,
+            end_point: c.end_point,
+        }
+    }
+}
+
 /// Compiled-in languages, reflecting the Cargo features this wheel was built
 /// with.
 #[pyfunction]
@@ -335,6 +743,50 @@ fn ignored_regions(language_key: &str, source: &str) -> PyResult<Vec<PyIgnoredRe
         .collect())
 }
 
+/// Parse `source` (bytes) as `language_key` and return every node as a
+/// `FlatTree`, whose `root_node` walks like a py-tree-sitter tree. Accepts the
+/// grammar keys of `language_for_key`, so `"tsx"` selects the JSX-aware
+/// TypeScript grammar.
+#[pyfunction]
+fn parse_tree(
+    py: Python<'_>,
+    language_key: &str,
+    source: Bound<'_, PyBytes>,
+) -> PyResult<PyFlatTree> {
+    let tree = parse(language_key, source.as_bytes())?;
+    let inner = flat::flatten(&tree);
+    let kind_strs = inner
+        .kinds
+        .iter()
+        .map(|k| PyString::intern_bound(py, k).unbind())
+        .collect();
+    Ok(PyFlatTree {
+        inner,
+        source: source.unbind(),
+        kind_strs,
+        serial: TREE_SERIAL.fetch_add(1, Ordering::Relaxed),
+    })
+}
+
+/// Run a tree-sitter query over `source` and return its captures in document
+/// order. Byte offsets are into `source` encoded as UTF-8. Raises `ValueError`
+/// when the query does not compile against the grammar.
+#[pyfunction]
+fn query(language_key: &str, source: &str, query: &str) -> PyResult<Vec<PyCapture>> {
+    let language = registry::language_for_key(language_key)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown language key: {language_key}")))?;
+    let tree = parse(language_key, source.as_bytes())?;
+    tsquery::run_query(&language, tree.root_node(), source.as_bytes(), query)
+        .map(|caps| caps.into_iter().map(PyCapture::from).collect())
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// The grammar's bundled tags query (definitions and references), or `None`.
+#[pyfunction]
+fn tags_query(language_key: &str) -> Option<String> {
+    tsquery::tags_query(language_key)
+}
+
 #[pymodule]
 fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLanguageInfo>()?;
@@ -344,6 +796,10 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFingerprint>()?;
     m.add_class::<PySuppression>()?;
     m.add_class::<PyIgnoredRegion>()?;
+    m.add_class::<PyFlatTree>()?;
+    m.add_class::<PyNode>()?;
+    m.add_class::<PyCapture>()?;
+    m.add("NONE", flat::NONE)?;
     m.add_function(wrap_pyfunction!(languages, m)?)?;
     m.add_function(wrap_pyfunction!(supported_languages_report, m)?)?;
     m.add_function(wrap_pyfunction!(call_edges, m)?)?;
@@ -352,5 +808,8 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(function_fingerprints, m)?)?;
     m.add_function(wrap_pyfunction!(suppressions, m)?)?;
     m.add_function(wrap_pyfunction!(ignored_regions, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_tree, m)?)?;
+    m.add_function(wrap_pyfunction!(query, m)?)?;
+    m.add_function(wrap_pyfunction!(tags_query, m)?)?;
     Ok(())
 }

@@ -22,6 +22,7 @@ pub mod dead_code_csharp;
 #[cfg(feature = "lang-swift")]
 pub mod dead_code_swift;
 pub mod fingerprint;
+pub mod flat;
 pub mod imports;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod isr;
@@ -32,6 +33,7 @@ pub mod query;
 pub mod regions;
 pub mod registry;
 pub mod suppressions;
+pub mod tsquery;
 
 pub use c_standard::{detect_min_c_standard, CStandard};
 pub use calls::{call_edges, collect_local_names, get_function_name, is_function_kind, CallEdge};
@@ -55,6 +57,7 @@ pub use fingerprint::{
     block_fingerprints, duplicate_groups, function_fingerprints, is_block_kind, structural_hash,
     CorpusFingerprint, Fingerprint, FingerprintTier,
 };
+pub use flat::{flatten, FlatTree};
 pub use imports::{distinct_import_count, import_sources};
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub use isr::{interrupt_handlers, InterruptEvidence, InterruptHandler};
@@ -72,6 +75,7 @@ pub use registry::{
     supported_languages_report, LanguageInfo, SlocMode,
 };
 pub use suppressions::{suppressions, Suppression};
+pub use tsquery::{run_query, tags_query, Capture};
 
 // Grammar re-exports — gated by feature so consumers reach grammars without
 // adding their own direct tree-sitter-* dependencies.
