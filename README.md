@@ -224,6 +224,8 @@ fps = lps.function_fingerprints("rust", src, min_nodes=1)
 caps = lps.query("rust", src, "(function_item name: (identifier) @name)")  # [Capture]
 tags = lps.tags_query("tsx")                 # the grammar's bundled tags query, or None
 tree = lps.parse_tree("rust", src.encode())  # FlatTree: every node as columns
+cls = lps.classify_file("src/main.rs", max_size=4 << 20)  # FileClass: kind, encoding, ...
+skip = lps.PathIgnore(["vendor/**"]).is_ignored("vendor/x.c")  # True
 ```
 
 Python can't hand this crate a `tree_sitter::Node`/`Tree` directly — this

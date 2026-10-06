@@ -25,10 +25,12 @@ use crate::calls;
 use crate::calls::CallEdge;
 use crate::cfg;
 use crate::cfg::{BasicBlock, CfgEdge, FunctionCfg};
+use crate::classify::{self as classify_mod, BinaryKind, ClassifyLimits, FileClass, TextEncoding};
 use crate::fingerprint;
 use crate::fingerprint::Fingerprint;
 use crate::flat::{self, FlatTree};
 use crate::imports;
+use crate::path_ignore;
 use crate::regions;
 use crate::regions::IgnoredRegion;
 use crate::registry;
@@ -651,6 +653,147 @@ impl From<Capture> for PyCapture {
     }
 }
 
+/// What `classify` / `classify_file` decided, flattened for Python: `kind` is
+/// one of `"empty"`, `"oversize"`, `"binary"`, `"source_text"`, and only the
+/// fields that kind defines are set. A heuristic hint, never a gate: see the
+/// `classify` module docs for its limits.
+#[pyclass(name = "FileClass", frozen)]
+#[derive(Clone)]
+struct PyFileClass {
+    #[pyo3(get)]
+    kind: &'static str,
+    /// `oversize`: the file's size in bytes.
+    #[pyo3(get)]
+    size: Option<u64>,
+    /// `oversize`: the limit it exceeded.
+    #[pyo3(get)]
+    limit: Option<u64>,
+    /// `binary`: `"archive"`, `"compressed"`, `"elf"`, `"pe"`, `"macho"`,
+    /// `"image"`, `"pdf"`, `"document"`, `"media"`, `"font"` or `"unknown"`.
+    #[pyo3(get)]
+    binary_kind: Option<&'static str>,
+    /// `binary`: MIME type from the magic-number match, when there was one.
+    #[pyo3(get)]
+    mime: Option<&'static str>,
+    /// `source_text`: `"utf8"`, `"utf8_bom"`, `"utf16_le"`, `"utf16_be"` or
+    /// `"latin1"`.
+    #[pyo3(get)]
+    encoding: Option<&'static str>,
+    /// `source_text`: the file starts with a UTF-8 BOM.
+    #[pyo3(get)]
+    utf8_bom: bool,
+    /// `source_text`: the language key the extension maps to.
+    #[pyo3(get)]
+    language_by_extension: Option<&'static str>,
+    /// `source_text`: the language key the content suggests (shebang, `<?php`).
+    #[pyo3(get)]
+    language_by_content: Option<&'static str>,
+}
+
+#[pymethods]
+impl PyFileClass {
+    /// `True` only for `source_text`.
+    #[getter]
+    fn is_source_text(&self) -> bool {
+        self.kind == "source_text"
+    }
+
+    /// The extension's language, else the content's.
+    #[getter]
+    fn likely_language(&self) -> Option<&'static str> {
+        self.language_by_extension.or(self.language_by_content)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<FileClass kind={}>", self.kind)
+    }
+}
+
+fn binary_kind_name(kind: BinaryKind) -> &'static str {
+    match kind {
+        BinaryKind::Archive => "archive",
+        BinaryKind::Compressed => "compressed",
+        BinaryKind::Elf => "elf",
+        BinaryKind::Pe => "pe",
+        BinaryKind::MachO => "macho",
+        BinaryKind::Image => "image",
+        BinaryKind::Pdf => "pdf",
+        BinaryKind::Document => "document",
+        BinaryKind::Media => "media",
+        BinaryKind::Font => "font",
+        BinaryKind::Unknown => "unknown",
+    }
+}
+
+fn encoding_name(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Utf8 => "utf8",
+        TextEncoding::Utf8Bom => "utf8_bom",
+        TextEncoding::Utf16Le => "utf16_le",
+        TextEncoding::Utf16Be => "utf16_be",
+        TextEncoding::Latin1 => "latin1",
+    }
+}
+
+impl From<FileClass> for PyFileClass {
+    fn from(class: FileClass) -> Self {
+        let mut out = PyFileClass {
+            kind: "binary",
+            size: None,
+            limit: None,
+            binary_kind: None,
+            mime: None,
+            encoding: None,
+            utf8_bom: false,
+            language_by_extension: None,
+            language_by_content: None,
+        };
+        match class {
+            FileClass::Empty => out.kind = "empty",
+            FileClass::Oversize { size, limit } => {
+                out.kind = "oversize";
+                out.size = Some(size);
+                out.limit = Some(limit);
+            }
+            FileClass::Binary { kind, mime } => {
+                out.binary_kind = Some(binary_kind_name(kind));
+                out.mime = mime;
+            }
+            FileClass::SourceText(text) => {
+                out.kind = "source_text";
+                out.encoding = Some(encoding_name(text.encoding));
+                out.utf8_bom = text.utf8_bom;
+                out.language_by_extension = text.by_extension.map(|l| l.key);
+                out.language_by_content = text.by_content.map(|l| l.key);
+            }
+        }
+        out
+    }
+}
+
+/// Compiled glob ignore patterns (`toolchain.toml` `[ignore].paths` style).
+#[pyclass(name = "PathIgnore", frozen)]
+struct PyPathIgnore {
+    inner: path_ignore::PathIgnore,
+}
+
+#[pymethods]
+impl PyPathIgnore {
+    /// Compile `patterns`, e.g. `["vendor/**", "third_party/**"]`. Raises
+    /// `ValueError` naming the first invalid glob.
+    #[new]
+    fn new(patterns: Vec<String>) -> PyResult<Self> {
+        path_ignore::PathIgnore::new(&patterns)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Whether `path` (relative, `/`-separated) matches any pattern.
+    fn is_ignored(&self, path: &str) -> bool {
+        self.inner.is_ignored(std::path::Path::new(path))
+    }
+}
+
 /// Compiled-in languages, reflecting the Cargo features this wheel was built
 /// with.
 #[pyfunction]
@@ -787,6 +930,34 @@ fn tags_query(language_key: &str) -> Option<String> {
     tsquery::tags_query(language_key)
 }
 
+/// Heuristically classify the file at `path` from its metadata and its first
+/// `prefix_len` bytes. `max_size` (bytes) turns larger text files into
+/// `oversize`; the default is no limit. Raises `OSError` when the file cannot
+/// be read and for anything that is not a regular file.
+#[pyfunction]
+#[pyo3(signature = (path, max_size=None, prefix_len=classify_mod::DEFAULT_PREFIX_LEN))]
+fn classify_file(path: &str, max_size: Option<u64>, prefix_len: usize) -> PyResult<PyFileClass> {
+    let limits = ClassifyLimits {
+        prefix_len,
+        max_size,
+    };
+    classify_mod::classify_file(std::path::Path::new(path), &limits)
+        .map(PyFileClass::from)
+        .map_err(PyErr::from)
+}
+
+/// The I/O-free form of `classify_file`, for a caller that already holds the
+/// file's leading bytes and its size.
+#[pyfunction]
+#[pyo3(signature = (path, prefix, file_size, max_size=None))]
+fn classify(path: &str, prefix: &[u8], file_size: u64, max_size: Option<u64>) -> PyFileClass {
+    let limits = ClassifyLimits {
+        max_size,
+        ..ClassifyLimits::default()
+    };
+    classify_mod::classify(std::path::Path::new(path), prefix, file_size, &limits).into()
+}
+
 #[pymodule]
 fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLanguageInfo>()?;
@@ -799,6 +970,9 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFlatTree>()?;
     m.add_class::<PyNode>()?;
     m.add_class::<PyCapture>()?;
+    m.add_class::<PyFileClass>()?;
+    m.add_class::<PyPathIgnore>()?;
+    m.add("DEFAULT_PREFIX_LEN", classify_mod::DEFAULT_PREFIX_LEN)?;
     m.add("NONE", flat::NONE)?;
     m.add_function(wrap_pyfunction!(languages, m)?)?;
     m.add_function(wrap_pyfunction!(supported_languages_report, m)?)?;
@@ -811,5 +985,7 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_tree, m)?)?;
     m.add_function(wrap_pyfunction!(query, m)?)?;
     m.add_function(wrap_pyfunction!(tags_query, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_file, m)?)?;
+    m.add_function(wrap_pyfunction!(classify, m)?)?;
     Ok(())
 }

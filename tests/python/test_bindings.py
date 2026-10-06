@@ -215,3 +215,74 @@ def test_node_error_flags():
         flagged |= n.is_error or n.is_missing
         stack.extend(n.children)
     assert flagged
+
+
+# ─── classify / classify_file ────────────────────────────────────────────────
+
+
+def test_classify_file_source_text(tmp_path):
+    f = tmp_path / "main.rs"
+    f.write_text("fn main() {}\n")
+    c = lps.classify_file(str(f))
+    assert c.kind == "source_text" and c.is_source_text
+    assert c.encoding == "utf8" and not c.utf8_bom
+    assert c.language_by_extension == "rust" and c.likely_language == "rust"
+
+
+def test_classify_file_binary_named_as_source(tmp_path):
+    f = tmp_path / "huge.c"
+    f.write_bytes(b"PK\x03\x04" + b"\x00" * 64)
+    c = lps.classify_file(str(f))
+    assert c.kind == "binary" and not c.is_source_text
+    assert c.binary_kind == "archive" and c.mime == "application/zip"
+
+
+def test_classify_file_empty_and_oversize(tmp_path):
+    empty = tmp_path / "e.py"
+    empty.write_bytes(b"")
+    assert lps.classify_file(str(empty)).kind == "empty"
+    big = tmp_path / "big.py"
+    big.write_text("x = 1\n" * 100)
+    c = lps.classify_file(str(big), max_size=10)
+    assert (c.kind, c.size, c.limit) == ("oversize", 600, 10)
+
+
+def test_classify_file_language_by_content(tmp_path):
+    f = tmp_path / "tool"
+    f.write_text("#!/usr/bin/env python3\nprint(1)\n")
+    c = lps.classify_file(str(f))
+    assert c.language_by_extension is None and c.language_by_content == "python"
+
+
+def test_classify_file_missing_raises_oserror(tmp_path):
+    try:
+        lps.classify_file(str(tmp_path / "nope.c"))
+    except OSError:
+        return
+    raise AssertionError("expected OSError for a missing file")
+
+
+def test_classify_is_io_free():
+    c = lps.classify("a.c", b"int main(void) { return 0; }\n", 31)
+    assert c.kind == "source_text" and c.language_by_extension == "c"
+    assert lps.DEFAULT_PREFIX_LEN > 0
+
+
+# ─── PathIgnore ──────────────────────────────────────────────────────────────
+
+
+def test_path_ignore_matches_globs():
+    ignore = lps.PathIgnore(["vendor/**", "third_party/**", "*.gen.c"])
+    assert ignore.is_ignored("vendor/lib/foo.c")
+    assert ignore.is_ignored("third_party/x.rs")
+    assert ignore.is_ignored("a.gen.c")
+    assert not ignore.is_ignored("src/main.rs")
+    assert not lps.PathIgnore([]).is_ignored("anything")
+
+
+def test_path_ignore_invalid_glob_raises():
+    try:
+        lps.PathIgnore(["src/[unclosed"])
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for an invalid glob")
