@@ -2,7 +2,7 @@
 
 All notable changes to this crate are documented here.
 
-## 0.11.1 — unreleased
+## 0.11.1 — 2026-10-06
 
 ### Added
 
