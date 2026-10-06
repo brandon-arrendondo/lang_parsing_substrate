@@ -131,6 +131,9 @@ The result is a heuristic and can be wrong in both directions (see the
 signatures such as `MZ` or `BM` only count when the bytes also look binary.
 `classify(path, prefix, size, &limits)` is the I/O-free core, for callers
 that have already read the bytes.
+The thresholds are calibrated in `docs/classify-calibration.md`; re-run
+that check on a new corpus with `cargo run --release --example
+classify_calibrate -- ROOT...`.
 
 ### Analysis primitives
 

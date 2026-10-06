@@ -29,10 +29,19 @@
 //! - **Prefix only.** Only the first `prefix_len` bytes are inspected. A text
 //!   header followed by binary data later in the file (or vice versa) is
 //!   classified by the header alone.
-//! - **The thresholds are reasoned, not measured.** The NUL (0.1%), control
-//!   byte (5%) and invalid-UTF-8 (30%) cut-offs come from the statistics of
-//!   uniform random data versus source text. They have not been calibrated
-//!   against a real corpus of consumer inputs.
+//! - **Calibrated on C/C++ corpora, not on every language.** The thresholds
+//!   (NUL ≥ 8 and > 0.1%; other controls ≥ 8 and > 5%; invalid UTF-8 > 30%
+//!   with ≥ 8 NUL/control bytes) were checked against ~201K files: the
+//!   aurora-lint benchmark corpora, Juliet, aurora-lint's fixtures and
+//!   other checkouts. No C-family file came back `Binary`. See
+//!   `docs/classify-calibration.md`, and re-run with
+//!   `cargo run --example classify_calibrate` on new corpora.
+//! - **Source with many raw NUL bytes is `Binary`.** e.g. fuzz-regression
+//!   tests that embed raw NULs in string literals (one Java file in the
+//!   calibration set). This can't be fixed by tuning thresholds.
+//! - **Tiny binaries can be `SourceText`.** Each signal needs at least 8
+//!   offending bytes, so a binary of a few dozen bytes may pass as text.
+//!   That costs one cheap parse; the reverse mistake would drop real source.
 //! - **BOM-less UTF-16 is `Binary`.** Every other byte is NUL.
 //! - **UTF-32 is `Binary`.** There is no UTF-32 variant. Its BOMs
 //!   (`FF FE 00 00`, `00 00 FE FF`) are deliberately not read as UTF-16, so
@@ -179,6 +188,10 @@ pub enum TextEncoding {
 pub struct SourceText {
     /// Probable encoding of the bytes.
     pub encoding: TextEncoding,
+    /// `true` when the file starts with a UTF-8 BOM. Usually implied by
+    /// [`TextEncoding::Utf8Bom`], but also set when the bytes after the BOM
+    /// are not valid UTF-8 and `encoding` is therefore `Latin1`.
+    pub utf8_bom: bool,
     /// The language the file's extension maps to, if any (registry lookup).
     pub by_extension: Option<&'static LanguageInfo>,
     /// The language the file's content suggests (shebang / `<?php`), if any.
@@ -245,20 +258,8 @@ pub fn classify(path: &Path, prefix: &[u8], file_size: u64, limits: &ClassifyLim
         return binary(m.kind, Some(m.mime));
     }
 
-    let truncated = (prefix.len() as u64) < file_size;
-    let (encoding, body) = if let Some(rest) = prefix.strip_prefix(b"\xEF\xBB\xBF") {
-        (TextEncoding::Utf8Bom, rest)
-    } else if prefix.starts_with(b"\xFF\xFE") && !prefix.starts_with(b"\xFF\xFE\0\0") {
-        // `FF FE 00 00` is the UTF-32 LE BOM, not UTF-16 LE + U+0000; it
-        // falls through to the byte statistics (see "Known limitations").
-        (TextEncoding::Utf16Le, &[][..])
-    } else if prefix.starts_with(b"\xFE\xFF") {
-        (TextEncoding::Utf16Be, &[][..])
-    } else {
-        (TextEncoding::Utf8, prefix)
-    };
-
-    let stats = ByteStats::of(body, truncated);
+    let (encoding, body) = split_bom(prefix);
+    let stats = ByteStats::of(body, (prefix.len() as u64) < file_size);
     if stats.looks_binary() {
         return match magic {
             Some(m) => binary(m.kind, Some(m.mime)),
@@ -273,6 +274,10 @@ pub fn classify(path: &Path, prefix: &[u8], file_size: u64, limits: &ClassifyLim
             };
         }
     }
+    // A UTF-8 BOM followed by invalid UTF-8 is still reported as `Latin1`
+    // (the bytes after the BOM are what a decoder has to handle); the BOM
+    // itself is reported separately so it isn't lost.
+    let had_utf8_bom = encoding == TextEncoding::Utf8Bom;
     let encoding = if stats.invalid_utf8 == 0 {
         encoding
     } else {
@@ -280,6 +285,7 @@ pub fn classify(path: &Path, prefix: &[u8], file_size: u64, limits: &ClassifyLim
     };
     FileClass::SourceText(SourceText {
         encoding,
+        utf8_bom: had_utf8_bom,
         by_extension: language_info_for_file(path),
         by_content: content_language(body),
     })
@@ -289,20 +295,52 @@ fn binary(kind: BinaryKind, mime: Option<&'static str>) -> FileClass {
     FileClass::Binary { kind, mime }
 }
 
+/// Splits a leading BOM off `prefix`. A UTF-16 BOM yields an empty body: the
+/// byte statistics are meaningless for UTF-16, so they are skipped.
+fn split_bom(prefix: &[u8]) -> (TextEncoding, &[u8]) {
+    if let Some(rest) = prefix.strip_prefix(b"\xEF\xBB\xBF") {
+        (TextEncoding::Utf8Bom, rest)
+    } else if prefix.starts_with(b"\xFF\xFE") && !prefix.starts_with(b"\xFF\xFE\0\0") {
+        // `FF FE 00 00` is the UTF-32 LE BOM, not UTF-16 LE + U+0000; it
+        // falls through to the byte statistics (see "Known limitations").
+        (TextEncoding::Utf16Le, &[])
+    } else if prefix.starts_with(b"\xFE\xFF") {
+        (TextEncoding::Utf16Be, &[])
+    } else {
+        (TextEncoding::Utf8, prefix)
+    }
+}
+
+/// The raw byte counts behind [`classify`]'s text-vs-binary decision for one
+/// prefix: `(len, nul, control, invalid_utf8)`, after BOM handling.
+///
+/// Not part of the stable API — it exists so `examples/classify_calibrate.rs`
+/// can report the ratios a corpus actually produces.
+#[doc(hidden)]
+pub fn __byte_counts(prefix: &[u8], file_size: u64) -> (usize, usize, usize, usize) {
+    let (_, body) = split_bom(prefix);
+    let s = ByteStats::of(body, (prefix.len() as u64) < file_size);
+    (s.len, s.nul, s.control, s.invalid_utf8)
+}
+
 /// Reads `path`'s metadata and at most `limits.prefix_len` leading bytes,
 /// then calls [`classify`]. Never reads past the prefix.
 ///
 /// Returns an `InvalidInput` error for anything that is not a regular file
-/// (directories, FIFOs, devices), since reading those can block or never end.
+/// (directories, FIFOs, sockets, devices), since opening or reading those can
+/// block or never end. Symlinks are followed. The file type is checked with
+/// `std::fs::metadata` *before* opening, because opening a FIFO blocks until a
+/// writer appears. A path swapped for a FIFO between that check and the open
+/// can still block; that race is not defended against.
 pub fn classify_file(path: &Path, limits: &ClassifyLimits) -> io::Result<FileClass> {
-    let file = File::open(path)?;
-    let meta = file.metadata()?;
+    let meta = std::fs::metadata(path)?;
     if !meta.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{} is not a regular file", path.display()),
         ));
     }
+    let file = File::open(path)?;
     let mut prefix = Vec::with_capacity(limits.prefix_len.min(meta.len() as usize));
     file.take(limits.prefix_len as u64)
         .read_to_end(&mut prefix)?;
@@ -317,8 +355,10 @@ pub fn classify_file(path: &Path, limits: &ClassifyLimits) -> io::Result<FileCla
 struct Magic {
     kind: BinaryKind,
     mime: &'static str,
-    /// `true` when the signature contains bytes no text file starts with
-    /// (NUL, C0 controls, invalid UTF-8), so the hit is trusted outright.
+    /// `true` when the bytes `infer` checks for this type include at least
+    /// one NUL, C0 control, or invalid-UTF-8 byte — so no text file can
+    /// match — and the hit is trusted outright. (e.g. woff/woff2 start with
+    /// ASCII `wOFF`/`wOF2`, but `infer` also requires `00 01 00 00` after.)
     /// Weak hits — `infer` matches `MZ`, `BM`, `GIF`, `BZh`, `ustar` at 257,
     /// `%PDF-` anywhere in the first KiB, … — only count when the byte
     /// distribution independently looks binary.
@@ -326,10 +366,12 @@ struct Magic {
 }
 
 /// `infer` extensions whose signatures are strong (see [`Magic::strong`]).
+/// Without `infer`'s `std` feature every OLE2 file reports as `"doc"`, so
+/// `xls` / `ppt` / `msi` can never be returned and are not listed.
 const STRONG: &[&str] = &[
     "zip", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "ora", "gz", "xz", "zst", "lz4",
-    "7z", "rar", "rpm", "doc", "xls", "ppt", "msi", "elf", "mach", "class", "wasm", "png", "jpg",
-    "woff", "woff2", "mkv", "webm",
+    "7z", "rar", "rpm", "doc", "elf", "mach", "class", "wasm", "png", "jpg", "woff", "woff2",
+    "mkv", "webm",
 ];
 
 fn magic(prefix: &[u8]) -> Option<Magic> {
@@ -367,6 +409,12 @@ fn magic(prefix: &[u8]) -> Option<Magic> {
 // Byte distribution
 // ---------------------------------------------------------------------------
 
+/// Minimum NUL count before the NUL ratio can make a prefix `Binary`.
+const NUL_FLOOR: usize = 8;
+/// Minimum C0-control count before the control ratio can make a prefix
+/// `Binary`.
+const CONTROL_FLOOR: usize = 8;
+
 struct ByteStats {
     len: usize,
     nul: usize,
@@ -395,18 +443,23 @@ impl ByteStats {
         }
     }
 
-    /// Thresholds (as fractions of the prefix):
-    /// - NUL > 0.1% — one stray NUL in an 8 KiB source file passes; random or
-    ///   structured binary data (~0.4% NUL when uniform) does not.
-    /// - other control bytes > 5% — uniform random data is ~10%.
-    /// - invalid UTF-8 > 30% *and* any NUL/control byte — legacy multi-byte
-    ///   text (GBK, Shift-JIS) can be mostly invalid UTF-8 but has no control
-    ///   bytes, while binary data essentially always has some.
+    /// Each signal needs both an absolute floor and a ratio, so a handful
+    /// of stray bytes in a small source file never makes it `Binary` (a
+    /// false `Binary` silently drops real source, the worst outcome for a
+    /// consumer):
+    /// - NUL: at least [`NUL_FLOOR`] and more than 0.1% of the prefix.
+    /// - other control bytes: at least [`CONTROL_FLOOR`] and more than 5%.
+    /// - invalid UTF-8 above 30%, together with at least [`NUL_FLOOR`]
+    ///   NUL-or-control bytes — legacy multi-byte text (GBK, Shift-JIS) can
+    ///   be mostly invalid UTF-8 but has no control bytes.
+    ///
+    /// The cost is that a binary file too small to reach the floors is
+    /// reported as text, which only means a cheap parse of a tiny file.
     fn looks_binary(&self) -> bool {
         let len = self.len;
-        self.nul * 1000 > len
-            || self.control * 100 > len * 5
-            || (self.invalid_utf8 * 100 > len * 30 && self.nul + self.control > 0)
+        (self.nul >= NUL_FLOOR && self.nul * 1000 > len)
+            || (self.control >= CONTROL_FLOOR && self.control * 100 > len * 5)
+            || (self.invalid_utf8 * 100 > len * 30 && self.nul + self.control >= NUL_FLOOR)
     }
 }
 
@@ -703,24 +756,78 @@ mod tests {
     fn boms() {
         let t = text("bom.py", b"\xEF\xBB\xBFprint('hi')\n");
         assert_eq!(t.encoding, TextEncoding::Utf8Bom);
+        assert!(t.utf8_bom);
         let t = text("w.c", b"\xFF\xFEi\0n\0t\0 \0x\0;\0");
         assert_eq!(t.encoding, TextEncoding::Utf16Le);
         let t = text("w.c", b"\xFE\xFF\0i\0n\0t");
         assert_eq!(t.encoding, TextEncoding::Utf16Be);
-        // UTF-32 LE/BE BOMs are not mistaken for UTF-16; the NULs decide.
+    }
+
+    fn utf16le(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    fn utf32(s: &str, le: bool) -> Vec<u8> {
+        s.chars()
+            .flat_map(|c| {
+                let c = c as u32;
+                if le {
+                    c.to_le_bytes()
+                } else {
+                    c.to_be_bytes()
+                }
+            })
+            .collect()
+    }
+
+    const SNIPPET: &str = "int main(void) { return 0; }\n";
+
+    #[test]
+    fn utf32_boms_are_not_mistaken_for_utf16() {
+        // UTF-32 has no variant here; the NULs decide, so it is `Binary`.
+        let le = utf32(&format!("\u{FEFF}{SNIPPET}"), true);
+        assert_eq!(&le[..4], b"\xFF\xFE\0\0");
+        assert_eq!(binary_kind("w.c", &le), Some(BinaryKind::Unknown));
+        let be = utf32(&format!("\u{FEFF}{SNIPPET}"), false);
+        assert_eq!(&be[..4], b"\0\0\xFE\xFF");
+        assert_eq!(binary_kind("w.c", &be), Some(BinaryKind::Unknown));
+    }
+
+    #[test]
+    fn bomless_utf16_is_a_documented_false_binary() {
         assert_eq!(
-            binary_kind("w.c", b"\xFF\xFE\0\0i\0\0\0n\0\0\0t\0\0\0"),
+            binary_kind("w.c", &utf16le(SNIPPET)),
             Some(BinaryKind::Unknown)
         );
-        assert_eq!(
-            binary_kind("w.c", b"\0\0\xFE\xFF\0\0\0i\0\0\0n\0\0\0t"),
-            Some(BinaryKind::Unknown)
-        );
-        // BOM-less UTF-16 is a known false "binary".
-        assert_eq!(
-            binary_kind("w.c", b"i\0n\0t\0 \0x\0;\0"),
-            Some(BinaryKind::Unknown)
-        );
+    }
+
+    #[test]
+    fn utf8_bom_with_invalid_bytes_keeps_the_bom_flag() {
+        let t = text("bom.c", b"\xEF\xBB\xBF/* caf\xE9 */\nint x;\n");
+        assert_eq!(t.encoding, TextEncoding::Latin1);
+        assert!(t.utf8_bom);
+        assert!(!text("plain.c", b"/* caf\xE9 */\n").utf8_bom);
+    }
+
+    #[test]
+    fn stray_nul_or_control_in_a_small_file_is_text() {
+        // Review case: a ~500-byte .c with one NUL used to be `Binary`.
+        let mut src: Vec<u8> = b"int x;\n".iter().copied().cycle().take(500).collect();
+        src[100] = 0;
+        assert!(class("small.c", &src).is_source_text());
+        // An 18-byte file with one raw 0x01 / 0x08.
+        assert!(class("tiny.c", b"int x; /*\x01*/\n").is_source_text());
+        assert!(class("tiny.c", b"int y; /*\x08*/\n").is_source_text());
+        // Several of each, still under the floors.
+        let mut src = b"int a;\n".repeat(4);
+        src.extend([0, 0, 0, 1, 2, 3, 0x08, 0x08]);
+        assert!(class("few.c", &src).is_source_text());
+    }
+
+    #[test]
+    fn crlf_formfeed_esc_and_sub_are_text() {
+        let src = b"int a;\r\n\x0C\r\n/* \x1B[1mbold\x1B[0m */\r\nint b;\r\n\x1A";
+        assert!(class("dos.c", src).is_source_text());
     }
 
     #[test]
@@ -833,6 +940,109 @@ mod tests {
             classify_file(&dir, &limits).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
+        assert_eq!(
+            classify_file(&dir.join("missing.c"), &limits)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lps-classify-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_file_follows_symlinks() {
+        let dir = scratch_dir("symlink");
+        let zip = dir.join("real.zip");
+        std::fs::write(&zip, with_header(b"PK\x03\x04")).unwrap();
+        let link = dir.join("looks_like.c");
+        std::os::unix::fs::symlink(&zip, &link).unwrap();
+        assert!(matches!(
+            classify_file(&link, &ClassifyLimits::default()).unwrap(),
+            FileClass::Binary {
+                kind: BinaryKind::Archive,
+                ..
+            }
+        ));
+        let dangling = dir.join("dangling.c");
+        std::os::unix::fs::symlink(dir.join("nope"), &dangling).unwrap();
+        assert_eq!(
+            classify_file(&dangling, &ClassifyLimits::default())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_file_rejects_a_fifo_without_blocking() {
+        let dir = scratch_dir("fifo");
+        let fifo = dir.join("pipe.c");
+        let ok = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("mkfifo unavailable; skipping");
+            return;
+        }
+        // Run on a thread so a regression (open() before the type check)
+        // fails the test instead of hanging the suite.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(classify_file(&path, &ClassifyLimits::default()).map_err(|e| e.kind()));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("classify_file blocked on a FIFO");
+        assert_eq!(got.unwrap_err(), io::ErrorKind::InvalidInput);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_file_reports_permission_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir("perm");
+        let locked = dir.join("locked.c");
+        std::fs::write(&locked, b"int x;\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root (or CAP_DAC_OVERRIDE) can still open it; nothing to assert then.
+        if File::open(&locked).is_err() {
+            assert_eq!(
+                classify_file(&locked, &ClassifyLimits::default())
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `magic()` matches on `infer`'s extension strings; an `infer` upgrade
+    /// that renames or drops one would silently demote it to weak.
+    #[test]
+    fn strong_extensions_exist_in_infer() {
+        for ext in STRONG {
+            assert!(infer::is_supported(ext), "infer no longer knows {ext:?}");
+        }
+        for ext in [
+            "exe", "dll", "mach", "pdf", "tar", "ar", "deb", "cab", "crx", "cpio", "par2", "bz2",
+            "bz3", "Z", "lz", "pem", "rtf", "ps",
+        ] {
+            assert!(infer::is_supported(ext), "infer no longer knows {ext:?}");
+        }
     }
 }

@@ -31,10 +31,20 @@ All notable changes to this crate are documented here.
   - Language hints: `SourceText::by_extension` (registry) and `by_content`
     (shebang / `<?php`), with `likely_language()` and `extension_agrees()`.
     These are hints only and never gate the result.
+  - Thresholds need an absolute floor as well as a ratio (at least 8
+    NUL/control bytes), so stray bytes in a small source file never make it
+    `Binary`. They were calibrated on about 201K files (aurora-lint benchmark
+    corpora, Juliet, fixtures) with no C-family file coming back `Binary`.
+    See `docs/classify-calibration.md` and `examples/classify_calibrate.rs`.
+  - `SourceText::utf8_bom` records a UTF-8 BOM even when the rest of the file
+    is not UTF-8.
+  - `classify_file` checks the file type before opening, so a FIFO returns
+    `InvalidInput` instead of blocking.
+  - `infer` is pinned to `~0.22`, since the code matches on its extension
+    strings.
   - Known limitations are listed in the `classify` module docs. Among them:
-    the decision uses the prefix only, the thresholds were reasoned rather
-    than measured on a corpus, BOM-less UTF-16 and all UTF-32 come back as
-    `Binary`, and without `infer`'s `std` feature every OLE2 file reports as
-    `Document`.
+    the decision uses the prefix only, source with many raw NUL bytes comes
+    back `Binary`, BOM-less UTF-16 and all UTF-32 come back as `Binary`, and
+    without `infer`'s `std` feature every OLE2 file reports as `Document`.
   - No policy is built in. The caller sets the size limit (default: none) and
     decides what to do with `Binary` and `Oversize`.
