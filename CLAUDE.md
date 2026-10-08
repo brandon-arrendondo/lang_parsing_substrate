@@ -1,5 +1,7 @@
 # lang-parsing-substrate — developer guide for Claude
 
+@AGENTS.md
+
 Shared Rust **library crate** — the common parsing substrate for knots, moldy, aurora-lint, and
 clew. Provides language detection, tree-sitter grammar dispatch, a `LanguageInfo` registry across
 16 languages (compiled in at build time via Cargo feature flags), and per-file analysis
