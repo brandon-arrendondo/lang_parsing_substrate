@@ -14,11 +14,10 @@
 //! existing precedent for C `switch`), `goto`/labeled statements, and
 //! constant-condition dead-branch folding (aurora-lint's `MacroConstantMap` is
 //! a C-preprocessor-specific concept; a generic constant-folding hook is
-//! left to a future task if a second language needs it).
+//! left for when a second language needs it).
 //!
-//! This module does not migrate aurora-lint's or knots' existing call sites —
-//! see the substrate's task history for why that migration, if ever done,
-//! belongs to its own follow-up task rather than this one.
+//! This module does not migrate aurora-lint's or knots' existing call sites.
+//! That migration, if ever done, belongs to its own change.
 
 use tree_sitter::Node;
 
