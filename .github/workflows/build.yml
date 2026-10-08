@@ -10,13 +10,17 @@ on:
     branches:
       - main
 
+# Read-only by default. Only the `release` job, which runs on a tag after
+# `build` passes, gets write access.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build and Test
     runs-on: ubuntu-22.04
-    # Write access only so a tag can create its GitHub Release (below).
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
 
     steps:
       - name: Checkout code
@@ -117,10 +121,33 @@ jobs:
           path: release/*
           retention-days: 30
 
-      # A tagged release keeps the SBOM and licence file permanently, as
-      # knots and aurora-lint do; the CI artifact above expires.
+  # A tagged release keeps the SBOM and licence file permanently, as knots
+  # and aurora-lint do; the CI artifact above expires. This job runs no
+  # build step, so the write token never meets a build script.
+  release:
+    name: GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check the tag matches Cargo.toml's version
+        run: |
+          EXPECTED="v${{ needs.build.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${EXPECTED}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${EXPECTED}" >&2
+            exit 1
+          fi
+
+      - name: Download SBOM and licence file
+        uses: actions/download-artifact@v4
+        with:
+          name: lang-parsing-substrate-${{ needs.build.outputs.version }}
+          path: release
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
