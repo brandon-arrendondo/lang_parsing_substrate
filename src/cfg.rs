@@ -6,8 +6,7 @@
 //! v1 scope covers `c`, `cpp`, and `rust`. Like `language_for_file`,
 //! [`build_function_cfg`] never fabricates a result for a language it
 //! doesn't model — it returns `None` rather than a fallback. Extending to
-//! more languages is a matter of adding another [`Shapes`] table entry; see
-//! `docs/` or `todo.db` for tracking further language coverage.
+//! more languages is a matter of adding another [`Shapes`] table entry.
 //!
 //! Deliberately out of scope for v1 (kept simple to avoid the correctness
 //! risk of guessing at un-verified per-language quirks): `switch`/`match`

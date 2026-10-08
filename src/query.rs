@@ -13,10 +13,9 @@
 //! [`crate::cfg`], which needs one because control-flow node kinds vary by
 //! grammar; a "does this node's kind equal X" predicate does not).
 //!
-//! This module does not migrate aurora-lint's own rule engine — see the
-//! substrate's task history (task 14's CFG generalization) for why that
-//! migration, if ever done, belongs to its own follow-up task rather than
-//! this one.
+//! This module does not migrate aurora-lint's own rule engine. That
+//! migration, if ever done, belongs to its own change, as the CFG
+//! generalization did.
 
 use tree_sitter::Node;
 
@@ -47,10 +46,10 @@ pub enum Walk {
 /// This is the substrate's single traversal primitive. It is iterative, so
 /// nesting depth never becomes call-stack depth (a real-world config file with
 /// a multi-thousand-deep else-if chain overflowed a recursive walk of this
-/// shape in aurora-lint, task 153). It also allocates nothing per node. The
+/// shape in aurora-lint). It also allocates nothing per node. The
 /// previous explicit-stack walks created a `TreeCursor` and a `Vec` for every
 /// visited node, which aurora-lint measured at about 5% of CPU on sqlite's
-/// `btree.c` (task 2222).
+/// `btree.c`.
 pub fn walk_preorder<'a>(root: Node<'a>, mut visit: impl FnMut(Node<'a>) -> Walk) {
     let mut cursor = root.walk();
     // Tracked here, not read from `cursor.depth()`: that recounts the cursor's stack,
@@ -129,7 +128,7 @@ pub fn find_first_descendant<'a>(
 /// Prefer this, or `node.children(&mut cursor)`, to an index loop:
 /// `Node::child(i)` walks from the first child, so
 /// `for i in 0..n.child_count() { n.child(i) }` is quadratic in the child count
-/// (aurora-lint found about 1,090 such loops; task 2222).
+/// (aurora-lint found about 1,090 such loops).
 pub fn child_nodes(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.children(&mut cursor).collect()
@@ -147,8 +146,8 @@ pub fn named_child_nodes(node: Node) -> Vec<Node> {
 ///
 /// tree-sitter does not store parent links: `Node::parent()` re-descends from
 /// the tree root, so it is O(depth), and a climb of k steps is O(k · depth).
-/// That made [`find_ancestor`] aurora-lint's top hotspot on long else-if chains
-/// (task 2222). Descending with `child_with_descendant` costs O(depth) for the
+/// That made [`find_ancestor`] aurora-lint's top hotspot on long else-if chains.
+/// Descending with `child_with_descendant` costs O(depth) for the
 /// whole chain. Empty when `node` is `root` or does not lie inside it.
 pub fn ancestors<'a>(root: Node<'a>, node: Node<'a>) -> Vec<Node<'a>> {
     let mut chain = Vec::new();
@@ -324,7 +323,7 @@ mod tests {
     fn find_descendants_handles_deeply_nested_input_without_overflowing_the_stack() {
         // Regression: a multi-thousand-deep else-if chain in a real config
         // file overflowed the call stack under a recursive walk of this
-        // exact shape (aurora-lint task 153). 20k levels is well past any
+        // exact shape in aurora-lint. 20k levels is well past any
         // depth a recursive implementation on a normal thread stack survives.
         let depth = 20_000;
         let mut source = String::new();

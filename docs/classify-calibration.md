@@ -1,7 +1,6 @@
 # `classify` calibration
 
-Calibration record for the text-vs-binary thresholds in `src/classify.rs`
-(substrate task 2168). These are aggregates only. Re-run with:
+Calibration record for the text-vs-binary thresholds in `src/classify.rs`. These are aggregates only. Re-run with:
 
 ```text
 cargo run --release --example classify_calibrate -- [binary:]ROOT...
@@ -17,7 +16,7 @@ source.
    is classified `Binary`.
 2. Every file in the planted-binary set is classified `Binary`.
 
-## Results (2026-10-06, r720)
+## Results (2026-10-06)
 
 | Corpus set | Files | C-family `SourceText` | C-family `Binary` | Other `Binary` |
 |---|---:|---:|---:|---:|
@@ -27,8 +26,8 @@ source.
 | 30 other checkouts under `~/toolchain` (reactos, lapack, cp2k, …) | 77,548 | 25,093 | **0** | 3,425 |
 | **Total** | **201,256** | **136,389** | **0** | 5,271 |
 
-The 71-codebase shadow set was not available on r720. It is to be run with
-the same example where it lives.
+The 71-codebase shadow set was not available on the machine that produced
+these results. It is to be run with the same example where it lives.
 
 Planted binaries, all renamed to `.c` (two to `.rs` / `.py`): ELF executable,
 PE executable, `.o`, `.a`, PNG, JPEG, PDF, zip, tar, gzip, xz, zstd, and 64 KiB

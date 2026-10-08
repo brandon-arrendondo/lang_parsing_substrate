@@ -16,7 +16,7 @@ All notable changes to this crate are documented here.
     a missing or non-regular file. `DEFAULT_PREFIX_LEN` is exported.
   - `PathIgnore(patterns)` with `is_ignored(path)` (the `toolchain.toml`
     `[ignore].paths` matcher). An invalid glob raises `ValueError`.
-- `query`: traversal primitives from aurora-lint's performance work (task 2222).
+- `query`: traversal primitives from aurora-lint's performance work.
   - `walk_preorder(root, visit)` walks a subtree pre-order with ONE `TreeCursor`;
     `visit` returns `Walk::{Continue, SkipChildren, Stop}`.
   - `ancestors(root, node)` returns a node's ancestor chain from one root-down

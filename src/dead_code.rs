@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::CppOnly)]);
     }
 
-    // Raylib rtext.c-shaped case 1 (task 540): macro unconditionally
+    // Raylib rtext.c-shaped case 1: macro unconditionally
     // #define'd two lines above the #if defined(...) — the #else is dead.
     #[test]
     fn always_defined_macro_else_branch_dead() {
@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(ranges(src), vec![(6, 6, DeadCodeReason::AlwaysDefined)]);
     }
 
-    // Raylib rtext.c-shaped case 2 (task 540): macro's #define is commented
+    // Raylib rtext.c-shaped case 2: macro's #define is commented
     // out — the #if defined(...) branch itself is dead.
     #[test]
     fn commented_out_define_makes_branch_dead() {
@@ -636,7 +636,7 @@ mod tests {
         // FOO is #define'd inside an *unproven* (`Neutral`) `#ifndef BAR`
         // branch — this scanner can't prove BAR either way, so it already
         // treats that branch as live everywhere else; the #define should be
-        // trusted the same way. Task 540/560's raylib case is exactly this
+        // trusted the same way. The raylib case below is exactly this
         // shape one level up: the whole file wrapped in an unprovable
         // `#if SUPPORT_MODULE_X` guard.
         let src = "#ifndef BAR\n#define FOO\n#endif\n\
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
     }
 
-    // Raylib rtext.c's actual shape (task 560 follow-up): the whole file is
+    // Raylib rtext.c's actual shape: the whole file is
     // wrapped in a single top-level `#if SUPPORT_MODULE_RTEXT` module guard
     // this scanner can't prove either way, so the unconditional #define
     // inside it sits at preprocessor-nesting depth 1, not 0.

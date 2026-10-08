@@ -1,8 +1,8 @@
 //! Source-level guards against traversal idioms that are quadratic on real trees.
 //!
 //! `Node::child(i)` walks from the first child, so an index loop over a node's
-//! children is O(k²) in the child count; aurora-lint found about 1,090 of them
-//! (task 2222). Use `child_nodes` / `named_child_nodes` or
+//! children is O(k²) in the child count; aurora-lint found about 1,090 of them.
+//! Use `child_nodes` / `named_child_nodes` or
 //! `node.children(&mut cursor)` instead. This test keeps the substrate's own source
 //! free of the idiom.
 

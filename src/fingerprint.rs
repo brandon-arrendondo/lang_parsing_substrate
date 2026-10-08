@@ -1,5 +1,5 @@
 //! AST subtree fingerprinting — the primitive behind cross-corpus clone
-//! detection (Tier 5, `todo.db` task 17). Computes a structural hash per
+//! detection (Tier 5). Computes a structural hash per
 //! function-like subtree, ignoring identifier and literal text so that a
 //! function renamed or with different constants still hashes identically to
 //! its original (Type-2 clone detection, in the PMD-CPD/BlackDuck sense).
@@ -12,9 +12,8 @@
 //! hash across files needs no such context, only the hashes themselves, so
 //! unlike those modules' cross-file resolution (which genuinely can't happen
 //! without corpus-wide name context this crate doesn't have), that part
-//! lives here too: see [`duplicate_groups`]. The `todo.db` entry for this
-//! task notes it operates at corpus level in recursive mode only, and is
-//! heavier than the other tiers — likely a separate opt-in pass in
+//! lives here too: see [`duplicate_groups`]. It operates at corpus level in
+//! recursive mode only, and is heavier than the other tiers — likely a separate opt-in pass in
 //! consumers rather than part of their default per-file walk, but the
 //! grouping step itself doesn't need to be reimplemented per consumer.
 //!
@@ -33,7 +32,7 @@
 //! return types (`-> Vec<String>` vs. `-> Vec<RuleViolation>`) previously
 //! hashed identically, since `type_identifier` is the same *kind* regardless
 //! of which name it holds — a real false-positive surfaced by an actual
-//! clone-detection pass on a ~11k-function corpus (`todo.db` task 62).
+//! clone-detection pass on a ~11k-function corpus.
 //! Parameter/variable *names* are still ignored, preserving Type-2
 //! (renamed-identifier) clone matching; only the type annotation's text is
 //! folded in, and only for the top-level node being hashed, not every
@@ -484,7 +483,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-rust")]
     fn same_skeleton_different_return_type_hashes_differently() {
-        // The exact false positive from todo.db task 62: a "new accumulator,
+        // The exact false positive from that clone-detection pass: a "new accumulator,
         // delegate, return" skeleton that's structurally the same AST shape
         // whether it collects names or collects violations — only the
         // declared return type's *text* distinguishes them, since

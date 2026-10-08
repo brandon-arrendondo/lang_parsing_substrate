@@ -794,7 +794,7 @@ mod tests {
     }
 
     /// Regression for the sqlite3Init/sqlite3InitOne false MSC04-C
-    /// indirect-recursion cycle (aurora-lint task 267/296), reproduced with the
+    /// indirect-recursion cycle in aurora-lint, reproduced with the
     /// real sqlite3/src/prepare.c source (trimmed to just the two functions
     /// involved): a brace that opens under `#ifndef SQLITE_OMIT_AUTHORIZATION`
     /// and closes under a second, identical `#ifndef SQLITE_OMIT_AUTHORIZATION`
@@ -1100,7 +1100,7 @@ int sqlite3Init(sqlite3 *db, char **pzErrMsg){
     }
 
     /// Regression for a second false-negative discovered while validating the
-    /// has_error() fix above (aurora-lint task 267/296): sqlite3/src/vdbemem.c's
+    /// has_error() fix above: sqlite3/src/vdbemem.c's
     /// valueFromExpr has an unrelated, separate parse error that makes
     /// tree-sitter-c mis-parse one of its `if` blocks as a
     /// function_definition-shaped node whose extracted "name" resolves to the
