@@ -1,7 +1,10 @@
 # Unified Toolchain Config — Design Spec
 
+**Status:** Proposal; whether it will be adopted is undecided. It was written when the formatter
+was funky (now moldy) and aurora-lint was called sqc; the names below are updated to the current tools.
+
 Covers `toolchain.toml`, per-tool config files, the shared suppress file, and inline
-suppression comment syntax.  This is the design basis for tasks 8, 10, 11, 12.
+suppression comment syntax.
 
 ---
 
@@ -11,13 +14,13 @@ suppression comment syntax.  This is the design basis for tasks 8, 10, 11, 12.
 project/
   toolchain.toml      # shared: ignores + language defaults (substrate-level)
   knots.toml          # knots thresholds + filter rules
-  funky.toml          # funky formatting per language (already exists; gains lang sections)
-  sqc.toml            # sqc manifest ref + rule overrides
+  moldy.toml          # moldy formatting per language (already exists; gains lang sections)
+  aurora-lint.toml    # aurora-lint manifest ref + rule overrides
   suppress.toml       # valgrind-style suppress entries for all tools
 ```
 
 Each tool loads its own config file plus `toolchain.toml` for the substrate-level shared
-settings.  A project that only uses knots never needs `sqc.toml`.  Tools pass the
+settings.  A project that only uses knots never needs `aurora-lint.toml`.  Tools pass the
 relevant config slices down to `lang_parsing_substrate`.
 
 ---
@@ -64,9 +67,10 @@ file_patterns     = ["tests/**"]    # glob
 function_patterns = ["^test_"]      # regex
 ```
 
-Built-in threshold defaults (used when neither config nor CLI flag is present):
+knots enables no threshold by default: a threshold applies only when the config or a CLI flag
+sets one. Suggested starting values:
 
-| Metric    | Default | Rationale |
+| Metric    | Suggested | Rationale |
 |-----------|---------|-----------|
 | mccabe    | 10      | PEP8/pylint recommendation; widely adopted |
 | cognitive | 15      | Sonar default |
@@ -74,7 +78,7 @@ Built-in threshold defaults (used when neither config nor CLI flag is present):
 
 ---
 
-## `funky.toml` — per-language formatting config
+## `moldy.toml` — per-language formatting config
 
 Language sections use the canonical names returned by `substrate::language_for_file()`.
 Built-in safe defaults are baked in per language; only write what diverges.
@@ -103,18 +107,18 @@ line_length = 88    # project override; PEP8 default 79 is the built-in
 # [rust], [go], [cpp] — omit to accept built-in defaults
 ```
 
-Config dispatch in funky:
+Config dispatch in moldy:
 
 ```
 file → substrate::language_for_file() → "python"
-     → load funky.toml [python.*]
+     → load moldy.toml [python.*]
      → merge over built-in Python defaults
      → format
 ```
 
 ---
 
-## `sqc.toml` — sqc-specific config
+## `aurora-lint.toml` — aurora-lint-specific config
 
 ```toml
 [manifest]
@@ -134,10 +138,10 @@ One file, all tools.  Each entry is a named suppression; the `tool` field scopes
 ```toml
 [[suppress]]
 name          = "legacy-int-arithmetic"
-tool          = "sqc"
+tool          = "aurora-lint"
 rule          = "INT30-C"
 file          = "src/legacy.c"
-hash          = "abc123def456789a"       # sqc only: SHA-256(rule+":"+normalised_code)[..16]
+hash          = "abc123def456789a"       # aurora-lint only: SHA-256(rule+":"+normalised_code)[..16]
 justification = "Validated by security team — JIRA-456"
 
 [[suppress]]
@@ -159,11 +163,11 @@ justification = "Third-party code"
 | Field         | Required | Description |
 |---------------|----------|-------------|
 | `name`        | yes      | Human-readable label (unique within file) |
-| `tool`        | yes      | `"knots"`, `"sqc"`, `"funky"`, or `"*"` |
+| `tool`        | yes      | `"knots"`, `"aurora-lint"`, `"moldy"`, or `"*"` |
 | `rule`        | no       | Exact rule/metric ID; omit to suppress all rules for the tool |
 | `file`        | no*      | Exact relative path |
 | `file_glob`   | no*      | Glob pattern |
-| `hash`        | sqc only | Truncated SHA-256 of normalised code; required for sqc inline suppressions |
+| `hash`        | aurora-lint only | Truncated SHA-256 of normalised code; required for aurora-lint inline suppressions |
 | `justification` | no     | Free text; strongly encouraged |
 
 \* At least one of `file` / `file_glob` must be present.  When both `rule` and file
@@ -179,7 +183,7 @@ comment character varies.  Block regions use `tools:off` / `tools:on`.
 ### Single-line (suppresses next non-blank statement; or enclosing function for knots metrics)
 
 ```c
-// tools:suppress sqc:INT30-C HASH:abc123def456789a JUSTIFICATION:"validated"
+// tools:suppress aurora-lint:INT30-C HASH:abc123def456789a JUSTIFICATION:"validated"
 uint32_t x = y + z;
 
 // tools:suppress knots:cognitive JUSTIFICATION:"legacy, JIRA-123"
@@ -197,10 +201,10 @@ def big_function():
 fn big_function() { ... }
 ```
 
-### Block region (format pass-through for funky; can scope other tools too)
+### Block region (format pass-through for moldy; can scope other tools too)
 
 ```c
-/* tools:off funky */
+/* tools:off moldy */
 int m[] = {1,0,
            0,1};
 /* tools:on */
@@ -212,13 +216,13 @@ int m[] = {1,0,
 
 ### Syntax rules
 
-- `TOOL:RULE` — tool name matches config file key (`knots`, `sqc`, `funky`); rule is a
+- `TOOL:RULE` — tool name matches config file key (`knots`, `aurora-lint`, `moldy`); rule is a
   metric name or rule ID within that tool.
-- `HASH:` field is required for sqc (tamper detection preserved); omit for other tools.
+- `HASH:` field is required for aurora-lint (tamper detection preserved); omit for other tools.
 - `JUSTIFICATION:` is optional but strongly encouraged.
 - Block form: `tools:off [TOOL[,TOOL,...]]`; no qualifier suppresses all tools.
-- Legacy `// SQC-SUPPRESS:` and `/* funky:off */` continue to parse during a
-  deprecation window (implementation detail for tasks 8, 11, 12).
+- Legacy `// AURORA-SUPPRESS:` (and its older `SQC-SUPPRESS` spelling) and funky's
+  `/* funky:off */` continue to parse during a deprecation window.
 
 ---
 
@@ -227,9 +231,10 @@ int m[] = {1,0,
 For a given tool invocation:
 
 1. Locate `toolchain.toml` — walk up from the target path until found (or repo root).
-2. Load the tool's own config file from the same directory as `toolchain.toml`.
+2. Load the tool's own config file from the same directory as `toolchain.toml`. (knots today
+   finds `knots.toml` by walking up from the target on its own; this step would change that.)
 3. Load `suppress.toml` from the same directory.
-4. CLI flags override config values (knots thresholds, sqc `--rules`, etc.).
+4. CLI flags override config values (knots thresholds, aurora-lint `--rules`, etc.).
 5. Per-language sections in the tool config override global sections in the tool config,
    which override `toolchain.toml` language defaults, which override built-in defaults.
 
@@ -237,12 +242,12 @@ For a given tool invocation:
 
 ## Migration path
 
-| Current surface | Target | Task |
-|----------------|--------|------|
-| knots JSON filter files | `[[knots.filter.*]]` in `knots.toml` | 10 |
-| funky `[ignore].patterns` in `funky.toml` | `[ignore]` in `toolchain.toml` + `[funky.ignore]` | 11 |
-| sqc `--exclude` CLI glob | `[sqc.ignore]` in `sqc.toml` | 12 |
-| knots inline suppress (none) | `tools:suppress knots:METRIC` | 8 |
-| `/* funky:off */` | `/* tools:off funky */` (legacy form kept during deprecation) | 8, 11 |
-| `// SQC-SUPPRESS:` | `// tools:suppress sqc:RULE HASH:...` (legacy form kept) | 8, 12 |
-| `.sqc-suppress.toml` | `suppress.toml` | 12 |
+| Current surface | Target |
+|----------------|--------|
+| knots JSON filter files | `[[knots.filter.*]]` in `knots.toml` |
+| moldy `[ignore].patterns` in `moldy.toml` | `[ignore]` in `toolchain.toml` + `[moldy.ignore]` |
+| aurora-lint `--exclude-all` / `--report-exclude` globs | `[aurora-lint.ignore]` in `aurora-lint.toml` |
+| knots inline suppress (none) | `tools:suppress knots:METRIC` |
+| funky's `/* funky:off */` | `/* tools:off moldy */` (legacy form kept during deprecation) |
+| `// AURORA-SUPPRESS:` | `// tools:suppress aurora-lint:RULE HASH:...` (legacy form kept) |
+| `.aurora-lint-suppress.toml` / `.sqc-suppress.toml` | `suppress.toml` |

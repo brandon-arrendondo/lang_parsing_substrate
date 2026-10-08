@@ -16,11 +16,7 @@ three downstream consumers:
   weakest of the three motivating cases.
 
 This doc is the complete brief — it does not depend on or reference any
-external tracker. When the research and implementation plan below are done,
-whoever picks this back up on the original machine is responsible for
-recording it in that machine's task tracker; no action needed here beyond
-writing the findings into this file (or a sibling file, per "What to
-produce" below).
+external tracker.
 
 ## Design intent already agreed on (do not re-litigate without cause)
 

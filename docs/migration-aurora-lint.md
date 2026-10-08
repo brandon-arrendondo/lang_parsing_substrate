@@ -1,11 +1,13 @@
 # Migrating aurora-lint to lang-parsing-substrate
 
-**Status:** IMPLEMENTED locally (uncommitted working tree); **benchmark validation pending.**
-Full local suite green: 3404 + 39 + 13 tests pass (was 3404 + 39 + 13 on the 0.22 baseline), zero new
-clippy warnings, binary smoke-tested (detects on `.c`/`.h`, rejects non-C). The tree-sitter
-`0.22 → 0.25` bump surfaced exactly **one** node-kind regression, now fixed (see below). The remaining
-gate is a benchmark run over real C codebases to catch subtler finding-count drift the fixtures don't
-cover.
+**Status:** Historical. The migration landed in aurora-lint `356abe0ed` (2026-06-30). This page is
+the plan and the record written at that time; its file paths, line numbers and counts are from then.
+Since then aurora-lint depends on the published crate with `default-features = false, features =
+["lang-c", "lang-cpp"]` (`lang-cpp` only to tell C++ headers apart) and checks extensions with
+`is_extension_for_language(ext, "c")` rather than `is_parseable_extension`.
+
+At the time, the full local suite passed with zero new clippy warnings, and the tree-sitter
+`0.22 → 0.25` bump surfaced exactly **one** node-kind regression, fixed as described below.
 
 **What was actually done (smaller than the worst case below):**
 - The query/`StreamingIterator` break was **1 production file** (EXP42-C), not many.
@@ -83,8 +85,7 @@ while let Some(m) = it.next() { /* ... */ }
 ```
 
 Known site: `src/rules/cert_c/EXP/EXP42-C/exp42_c.rs:41-55`. Grep the whole `rules/` tree for
-`.matches(` and `QueryCursor` to find every one. `Query::new` signature also changed (now takes
-`&Language`).
+`.matches(` and `QueryCursor` to find every one.
 
 ### B2. Node-kind revalidation (tree-sitter-c 0.21 → 0.24)
 
@@ -98,7 +99,8 @@ after the bump and chase every failure — these tests are exactly what catches 
 
 ### B3. Parser/Tree API deltas
 
-Minor signature changes across the 0.22→0.25 core API (e.g. `set_language` taking `&Language`). Mechanical.
+Minor signature changes across the 0.22→0.25 core API. Mechanical. (`Query::new` and `set_language`
+already took `&Language` in 0.22, so neither changes.)
 
 ---
 
@@ -121,8 +123,9 @@ For now, rule node-kind logic stays in aurora-lint and is touched **only** where
 ## Doc correction
 
 The substrate's `CLAUDE.md` lists aurora-lint's storage as "SQLite (path+mtime keyed)". This is **wrong**:
-aurora-lint uses a **`bincode`** prescan cache (`src/analyze/prescan.rs`, load/save at
-`analyze/mod.rs:237-285`) keyed by **scan scope, with no mtime/hash tracking**. Unaffected by this
+aurora-lint uses a **`bincode`** project-context cache (serialized in `src/analyze/context.rs`, loaded
+and saved by `load_project_context` in `src/analyze/mod.rs`) keyed by **scan scope, with no mtime/hash
+tracking**. Unaffected by this
 migration, but the table in CLAUDE.md should be corrected.
 
 ---

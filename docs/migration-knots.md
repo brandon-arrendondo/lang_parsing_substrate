@@ -1,16 +1,23 @@
 # Migrating knots to lang-parsing-substrate
 
-**Status:** DONE (working tree, uncommitted). knots builds against the substrate; full workspace test
-suite green (149 lib + 126 main + 5 member); zero new clippy warnings.
+**Status:** Historical. The migration landed in knots `f913cd0` (2026-06-30). This page is the plan and
+the record written at that time; its file paths, line numbers and counts are from then. The same day,
+substrate `61c4e37` dropped fixed-form Fortran (its grammar existed only as a git dependency, which
+`cargo publish` rejects), so `.f`/`.for`/`.f77` are unsupported and every fixed-form step below was
+superseded. knots now depends on the published crate rather than a path.
+
+At the time, the full workspace test suite passed with zero new clippy warnings.
 **Effort:** small (~1 day). Mostly deleting knots' copies of code the substrate already owns.
 
 **Deviations from this plan, applied during the migration:**
-- The substrate's `tree-sitter-fixed-form-fortran` was a broken `path = "../tree-sitter-fixed-form-fortran-fork"`
-  dep (missing on this machine), so the substrate itself didn't build. Switched it to the same **git dep**
-  (pinned rev) knots already uses — Cargo dedups them. See substrate CLAUDE.md.
+- The substrate's `tree-sitter-fixed-form-fortran` was a `path = "../tree-sitter-fixed-form-fortran-fork"`
+  dep that a fresh checkout does not have, so the substrate itself didn't build. Switched it to the same
+  **git dep** (pinned rev) knots already uses — Cargo dedups them. (Dropped later the same day; see
+  Status.)
 - Added `#[derive(Eq, Debug)]` to the substrate's `SlocMode` (needed by `assert_eq!` in the new tests).
 - Ported the registry tests into the substrate (`every_registered_extension_maps_to_its_grammar`,
-  `fixed_form_fortran_sloc_mode`, `unknown_extension_has_no_language`, `python_sloc_mode`).
+  `fixed_form_fortran_sloc_mode`, `unknown_extension_has_no_language`, `python_sloc_mode`). The
+  fixed-form test was later replaced by `fortran_sloc_mode`.
 - `complexity.rs` test modules also held bare `tree_sitter_*` grammar refs (not just `main.rs`); qualified
   them to `crate::tree_sitter_*`.
 **Why it's small:** the substrate's `LanguageInfo`, `SlocMode`, `languages()`, `language_for_file`,
@@ -38,6 +45,10 @@ the substrate. knots' metrics domain logic (function discovery, name extraction,
 ---
 
 ## Prerequisite: substrate change
+
+*Superseded:* with fixed-form Fortran dropped, the shipped `sloc_mode_for_file` is
+`language_info_for_file(path).map(|l| l.sloc_mode)`, and `SlocMode` has no `FortranFixed` variant.
+The plan as written:
 
 Add to `lang_parsing_substrate/src/registry.rs`:
 
@@ -128,7 +139,9 @@ These are knots' metrics domain logic and are untouched by the migration:
 - All of `complexity.rs` (SLOC calculators, McCabe, cognitive, etc.). The SLOC *calculators* stay;
   only the SLOC-*mode lookup* moves to the substrate.
 
-(These may eventually be absorbed by substrate Tier 2 — call graph — but not in this migration.)
+(These may eventually be absorbed by substrate Tier 2 — call graph — but not in this migration.
+Since then the substrate ships `calls::get_function_name` and `calls::collect_local_names`; knots still
+has its own copies.)
 
 ---
 
@@ -136,6 +149,7 @@ These are knots' metrics domain logic and are untouched by the migration:
 
 - `cargo build` / `cargo test` in knots, including the `knots-test-complexity` workspace member.
 - Spot-check a fixed-form Fortran file (`.f`) reports `FortranFixed` SLOC behavior unchanged.
+  (Superseded: fixed-form Fortran is no longer supported.)
 - Confirm an unknown extension is now **skipped** (previously parsed as C) — this is the one
   intentional behavior change; note it in knots' changelog.
 - `--supported-languages` output unchanged.
