@@ -16,7 +16,7 @@ and keep it current when adding a module. What follows is only what that table d
 |------|------------------|
 | `src/lib.rs` | Module wiring and re-exports; cfg-gated grammar re-exports (`pub use tree_sitter_*`). A module's feature gate lives here — check it before assuming a module is always compiled. |
 | `src/registry.rs` | `languages()`, `language_for_file()`, `language_for_header_content()` and friends — see invariants below |
-| `src/py.rs` | PyO3 bindings, `pyo3` feature only. Each wrapper takes `(language_key, source)` and parses internally — Python can't hand in a tree-sitter node. |
+| `src/py.rs` | PyO3 bindings, `pyo3` feature only. The wrappers that analyse code take `(language_key, source)` and parse internally — Python can't hand in a tree-sitter node. `classify` / `classify_file` take a path instead; `languages`, `supported_languages_report` and `tags_query` take no source. |
 | `tests/smoke.rs` | Parses a valid snippet in every compiled-in language |
 | `tests/python/` | Binding tests; need an installed wheel (`invoke build-wheel && pip install target/wheels/*.whl`) |
 | `docs/releasing.md` | crates.io + PyPI release process (the wheel is released via git tag) |
@@ -42,23 +42,24 @@ Feature gates that aren't obvious from the module name:
 
 1. **`Cargo.toml`** — add `tree-sitter-<lang> = { version = "...", optional = true }` and a `lang-<name>` feature under `[features]`. Add it to `all-languages`.
 2. **`src/registry.rs` — `languages()`** — add a `#[cfg(feature = "lang-<name>")] v.push(LanguageInfo { ... })` block.
-3. **`src/registry.rs` — `language_for_file()`** — add a `#[cfg(feature = "lang-<name>")] Some("ext" | ...) => Some(...LANGUAGE.into())` arm. Keep C last (it matches `.h` which could shadow other languages if placed first).
-4. **`src/lib.rs`** — add `#[cfg(feature = "lang-<name>")] pub use tree_sitter_<name>;`
+3. **`src/registry.rs` — `language_for_file()`** — add a `#[cfg(feature = "lang-<name>")] Some("ext" | ...) => Some(...LANGUAGE.into())` arm. The arms match disjoint extensions, so their order does not change the result; C's arm is last by convention.
+4. **`src/registry.rs` — `language_for_key()`** — add a `#[cfg(feature = "lang-<name>")] "<key>" => Some(...LANGUAGE.into())` arm. The Python bindings parse through it.
+5. **`src/lib.rs`** — add `#[cfg(feature = "lang-<name>")] pub use tree_sitter_<name>;`
 
 ## Testing and commits
 
 - `invoke test` runs `cargo test --all-features`, then the `lang-c,lang-cpp` subset, then the Python binding tests if a wheel is installed.
-- The pre-commit hooks run fmt, `clippy --all-targets --all-features -D warnings`, and **both** cargo test passes — expect roughly 85 s per commit.
+- The pre-commit hooks run fmt, `clippy --all-targets --all-features -D warnings`, **both** cargo test passes, the knots complexity hook on changed Rust files, and the DCO and agent-guard checks. The two test passes alone take about a minute.
 - `cargo clippy --no-default-features --all-targets -- -D warnings` currently fails on unused test helpers in several modules. That failure predates any open branch; don't treat it as a regression.
 
 ## Consumers
 
 | Tool | Execution model | Cross-file features | Storage need |
 |------|----------------|--------------------|----|
-| knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
-| moldy | pre-commit or `--recursive` | OFF in single-file; ON in recursive | in-memory |
-| aurora-lint | always full-scan | always ON | SQLite (path+mtime keyed) |
-| clew | full-repo index (Python, via the `pyo3` bindings) | always ON | SQLite graph |
+| knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive (`--find-duplicates`) | in-memory |
+| moldy | pre-commit or `--recursive` | none (formats one file at a time) | in-memory |
+| aurora-lint | full scan, or `--diff` for changed files | ON (project pre-scan) | none by default; optional bincode pre-scan cache (`--save-prescan` / `--load-prescan`), not mtime-keyed |
+| clew | full-repo index (Python, via the `pyo3` bindings on its develop branch; its 1.0.39 release does not use them yet) | always ON | SQLite graph |
 
 ## Substrate capability tiers
 
@@ -73,9 +74,9 @@ Feature gates that aren't obvious from the module name:
 ## Related projects
 
 - `../knots/` — complexity metrics tool; CLAUDE.md there is the knots developer guide
-- `../moldy/` — formatting tool (replaced funky; older docs and the `Cargo.toml` description may still say funky)
+- `../moldy/` — formatting tool, funky's successor (funky still exists)
 - `../aurora-lint/` — CERT-C compliance tool; has the rule engine that becomes Tier 4
-- `../clew/` — repository → SQLite graph indexer served over MCP; consumes the Python bindings
+- `../clew/` — repository → SQLite graph indexer served over MCP; its develop branch consumes the Python bindings
 
 ## Fixed-form Fortran
 
