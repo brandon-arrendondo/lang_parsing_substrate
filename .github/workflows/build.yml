@@ -14,6 +14,9 @@ jobs:
   build:
     name: Build and Test
     runs-on: ubuntu-22.04
+    # Write access only so a tag can create its GitHub Release (below).
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -84,20 +87,41 @@ jobs:
       - name: Install cargo-about
         run: cargo install cargo-about --features cli
 
+      # The licence file and SBOM describe what the PyPI wheel ships: the
+      # default language set plus the `pyo3` bindings (pyproject.toml's
+      # [tool.maturin] features). The crates.io release is source only and
+      # bundles no dependency.
       - name: Generate Third-Party Licenses
-        run: cargo about generate about.hbs -o THIRD_PARTY_LICENSES.txt
+        run: cargo about generate --features pyo3 about.hbs -o THIRD_PARTY_LICENSES.txt
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx
 
       - name: Generate SBOM (CycloneDX)
-        run: cargo cyclonedx --format json --spec-version 1.5
+        run: cargo cyclonedx --features pyo3 --format json --spec-version 1.5
+
+      - name: Stage SBOM release assets
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p release
+          cp lang-parsing-substrate.cdx.json \
+             "release/lang-parsing-substrate-${VERSION}.cdx.json"
+          cp THIRD_PARTY_LICENSES.txt \
+             "release/lang-parsing-substrate-${VERSION}-THIRD_PARTY_LICENSES.txt"
+          ls -lh release/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: lang-parsing-substrate-${{ steps.version.outputs.VERSION }}
-          path: |
-            THIRD_PARTY_LICENSES.txt
-            lang-parsing-substrate.cdx.json
+          path: release/*
           retention-days: 30
+
+      # A tagged release keeps the SBOM and licence file permanently, as
+      # knots and aurora-lint do; the CI artifact above expires.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
