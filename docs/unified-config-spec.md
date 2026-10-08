@@ -1,7 +1,19 @@
 # Unified Toolchain Config — Design Spec
 
-**Status:** Proposal; whether it will be adopted is undecided. It was written when the formatter
-was funky (now moldy) and aurora-lint was called sqc; the names below are updated to the current tools.
+**Status:** Partly implemented; the substrate's `suppressions`, `regions` and `path_ignore`
+modules cite this page as their spec.
+
+- **Implemented:** `toolchain.toml` `[ignore].paths` (read by aurora-lint and moldy); `knots.toml`
+  thresholds and `[[filter.exclude]]` (read by knots); `suppress.toml` (read by aurora-lint, which
+  falls back to its older suppress-file names); inline `tools:suppress TOOL:RULE` (parsed by the
+  substrate, honoured by aurora-lint and knots); and `tools:off` / `tools:on` regions (parsed by the
+  substrate, honoured by knots).
+- **Still proposed:** `toolchain.toml` language defaults, per-language sections in `moldy.toml`,
+  `aurora-lint.toml`, loading each tool's config from beside `toolchain.toml`, and a `funky:off`
+  deprecation window in moldy.
+
+It was written when the formatter was funky (succeeded by moldy) and aurora-lint was called sqc;
+the names below are the current ones.
 
 Covers `toolchain.toml`, per-tool config files, the shared suppress file, and inline
 suppression comment syntax.
@@ -221,8 +233,9 @@ int m[] = {1,0,
 - `HASH:` field is required for aurora-lint (tamper detection preserved); omit for other tools.
 - `JUSTIFICATION:` is optional but strongly encouraged.
 - Block form: `tools:off [TOOL[,TOOL,...]]`; no qualifier suppresses all tools.
-- Legacy `// AURORA-SUPPRESS:` (and its older `SQC-SUPPRESS` spelling) and funky's
-  `/* funky:off */` continue to parse during a deprecation window.
+- Legacy `// AURORA-SUPPRESS:` (and its older `SQC-SUPPRESS` spelling) still parses in
+  aurora-lint. *Proposed:* moldy would likewise accept funky's `/* funky:off */` during a
+  deprecation window; it does not today.
 
 ---
 
@@ -230,10 +243,13 @@ int m[] = {1,0,
 
 For a given tool invocation:
 
-1. Locate `toolchain.toml` — walk up from the target path until found (or repo root).
-2. Load the tool's own config file from the same directory as `toolchain.toml`. (knots today
-   finds `knots.toml` by walking up from the target on its own; this step would change that.)
-3. Load `suppress.toml` from the same directory.
+1. Locate `toolchain.toml` — walk up from the target path until found. (aurora-lint and moldy do
+   this today, up to the filesystem root.)
+2. *Proposed:* load the tool's own config file from the same directory as `toolchain.toml`.
+   (knots today finds `knots.toml` on its own, walking up from the current working directory;
+   this step would change that.)
+3. *Proposed:* load `suppress.toml` from the same directory. (aurora-lint today reads it from the
+   scan root.)
 4. CLI flags override config values (knots thresholds, aurora-lint `--rules`, etc.).
 5. Per-language sections in the tool config override global sections in the tool config,
    which override `toolchain.toml` language defaults, which override built-in defaults.
@@ -242,12 +258,12 @@ For a given tool invocation:
 
 ## Migration path
 
-| Current surface | Target |
-|----------------|--------|
-| knots JSON filter files | `[[knots.filter.*]]` in `knots.toml` |
-| moldy `[ignore].patterns` in `moldy.toml` | `[ignore]` in `toolchain.toml` + `[moldy.ignore]` |
-| aurora-lint `--exclude-all` / `--report-exclude` globs | `[aurora-lint.ignore]` in `aurora-lint.toml` |
-| knots inline suppress (none) | `tools:suppress knots:METRIC` |
-| funky's `/* funky:off */` | `/* tools:off moldy */` (legacy form kept during deprecation) |
-| `// AURORA-SUPPRESS:` | `// tools:suppress aurora-lint:RULE HASH:...` (legacy form kept) |
-| `.aurora-lint-suppress.toml` / `.sqc-suppress.toml` | `suppress.toml` |
+| Surface | Target | State |
+|---------|--------|-------|
+| knots `--include` / `--exclude` JSON filter files | `[[filter.exclude]]` in `knots.toml` | Done; the JSON files still work |
+| knots inline suppress | `tools:suppress knots:METRIC`, `tools:off` | Done |
+| aurora-lint `// AURORA-SUPPRESS:` | `// tools:suppress aurora-lint:RULE HASH:...` | Done; the old form still parses |
+| aurora-lint `.aurora-lint-suppress.toml` / `.sqc-suppress.toml` | `suppress.toml` | Done; the old names are fallbacks |
+| moldy `[ignore].patterns` in `moldy.toml` | `[ignore]` in `toolchain.toml` + `[moldy.ignore]` | `toolchain.toml` `[ignore].paths` done; `[moldy.ignore]` proposed |
+| aurora-lint `--exclude-all` / `--report-exclude` globs | `[aurora-lint.ignore]` in `aurora-lint.toml` | Proposed |
+| funky's `/* funky:off */` | `/* tools:off moldy */` | Proposed |
