@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1,<2"]
+requires = ["maturin>=1.9.3,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -9,7 +9,8 @@ name = "lang-parsing-substrate"
 dynamic = ["version"]
 description = "Shared language-parsing substrate for static-analysis tools — tree-sitter dispatch and analysis primitives across 16 languages, from Rust."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Brandon Arrendondo" }]
 keywords = ["tree-sitter", "parsing", "language-detection", "static-analysis"]
