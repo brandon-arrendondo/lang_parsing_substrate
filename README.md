@@ -262,4 +262,4 @@ Many earlier commits have a `Co-Authored-By: Claude` trailer, but not every AI-a
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. Copyright 2026 BISSELL Homecare, Inc. See [LICENSE](LICENSE).
