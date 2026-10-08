@@ -21,7 +21,6 @@ and keep it current when adding a module. What follows is only what that table d
 | `tests/python/` | Binding tests; need an installed wheel (`invoke build-wheel && pip install target/wheels/*.whl`) |
 | `docs/releasing.md` | crates.io + PyPI release process (the wheel is released via git tag) |
 | `tasks.py` | `invoke build / test / check / build-wheel / bump-version / publish / clean` |
-| `todo.db` | Task tracking — run `todo-sqlite-cli list` to see open work |
 
 Feature gates that aren't obvious from the module name:
 
@@ -71,8 +70,6 @@ Feature gates that aren't obvious from the module name:
 | 4 | Pattern matching — generalized rule engine (from aurora-lint) | Pending |
 | 5 | Fingerprinting / similarity (`fingerprint`, function + block tiers) | **Done** |
 
-See `todo.db` for open work.
-
 ## Related projects
 
 - `../knots/` — complexity metrics tool; CLAUDE.md there is the knots developer guide
@@ -84,4 +81,4 @@ See `todo.db` for open work.
 
 Fixed-form Fortran (`.f`/`.for`/`.f77`) is not supported: `lang-fortran` is free-form only because
 the fixed-form grammar exists only as a git dependency, which `cargo publish` rejects. Re-adding
-it is todo task #20 (external-blocked).
+it waits on a fixed-form grammar published to crates.io.
