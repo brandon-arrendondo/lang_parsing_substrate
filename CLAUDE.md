@@ -49,14 +49,14 @@ Feature gates that aren't obvious from the module name:
 ## Testing and commits
 
 - `invoke test` runs `cargo test --all-features`, then the `lang-c,lang-cpp` subset, then the Python binding tests if a wheel is installed.
-- The pre-commit hooks run fmt, `clippy --all-targets --all-features -D warnings`, **both** cargo test passes, the knots complexity hook on changed Rust files, and the DCO and agent-guard checks. The two test passes alone take about a minute.
+- The pre-commit hooks run fmt, `clippy --all-targets --all-features -D warnings`, **both** cargo test passes, the knots complexity hook on changed Rust files, and the DCO and agent-guard checks. Because the hook runs both full test passes, a commit takes a while.
 - `cargo clippy --no-default-features --all-targets -- -D warnings` currently fails on unused test helpers in several modules. That failure predates any open branch; don't treat it as a regression.
 
 ## Consumers
 
 | Tool | Execution model | Cross-file features | Storage need |
 |------|----------------|--------------------|----|
-| knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive (`--find-duplicates`) | in-memory |
+| knots | pre-commit or `--recursive` | OFF in single-file; ON in recursive (the Ce/Ca/Instability file-coupling pass, plus opt-in `--find-duplicates`) | in-memory |
 | moldy | pre-commit or `--recursive` | none (formats one file at a time) | in-memory |
 | aurora-lint | full scan, or `--diff` for changed files | ON (project pre-scan) | none by default; optional bincode pre-scan cache (`--save-prescan` / `--load-prescan`), not mtime-keyed |
 | clew | full-repo index (Python, via the `pyo3` bindings on its develop branch; its 1.0.39 release does not use them yet) | always ON | SQLite graph |
