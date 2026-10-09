@@ -3,7 +3,7 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
-## Unreleased
+## 0.11.2 — 2026-10-08
 
 ### Changed
 
