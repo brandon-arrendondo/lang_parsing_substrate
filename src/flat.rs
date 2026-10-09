@@ -121,9 +121,15 @@ impl FlatTree {
 }
 
 /// Interns strings into a table, returning each one's index.
+///
+/// `flatten` calls it once per node, so the hot path is a lookup by the
+/// grammar's numeric id (`kind_id`, `field_id`), not by name. The name is
+/// hashed only the first time an id is seen: two ids can share a name (an
+/// aliased symbol), and the table keeps one row per name.
 struct Interner {
     table: Vec<String>,
     index: HashMap<&'static str, u32>,
+    by_id: Vec<u32>,
 }
 
 impl Interner {
@@ -131,6 +137,7 @@ impl Interner {
         let mut interner = Self {
             table: Vec::new(),
             index: HashMap::new(),
+            by_id: Vec::new(),
         };
         for s in seed {
             interner.intern(s);
@@ -147,6 +154,22 @@ impl Interner {
         self.index.insert(s, i);
         i
     }
+
+    /// Intern `name()` under the grammar id `id`, computing the name only on
+    /// the first sighting of `id`.
+    fn intern_id(&mut self, id: u16, name: impl FnOnce() -> &'static str) -> u32 {
+        let slot = usize::from(id);
+        if let Some(&i) = self.by_id.get(slot) {
+            if i != NONE {
+                return i;
+            }
+        } else {
+            self.by_id.resize(slot + 1, NONE);
+        }
+        let i = self.intern(name());
+        self.by_id[slot] = i;
+        i
+    }
 }
 
 fn to_u32(v: usize) -> u32 {
@@ -158,7 +181,24 @@ fn to_u32(v: usize) -> u32 {
 /// Iterative (a `TreeCursor` walk), so a deeply nested file cannot overflow
 /// the stack.
 pub fn flatten(tree: &Tree) -> FlatTree {
-    let mut flat = FlatTree::default();
+    let n = tree.root_node().descendant_count();
+    let column = || Vec::with_capacity(n);
+    let mut flat = FlatTree {
+        kind: column(),
+        field: column(),
+        flags: column(),
+        parent: column(),
+        first_child: column(),
+        next_sibling: column(),
+        prev_sibling: column(),
+        start_byte: column(),
+        end_byte: column(),
+        start_row: column(),
+        start_col: column(),
+        end_row: column(),
+        end_col: column(),
+        ..FlatTree::default()
+    };
     let mut kinds = Interner::new(&[]);
     let mut fields = Interner::new(&[""]);
     let mut cursor = tree.walk();
@@ -183,9 +223,11 @@ pub fn flatten(tree: &Tree) -> FlatTree {
             }
         }
         let (start, end) = (node.start_position(), node.end_position());
-        flat.kind.push(kinds.intern(node.kind()));
-        flat.field
-            .push(cursor.field_name().map_or(0, |f| fields.intern(f)));
+        flat.kind
+            .push(kinds.intern_id(node.kind_id(), || node.kind()));
+        flat.field.push(cursor.field_id().map_or(0, |f| {
+            fields.intern_id(f.get(), || cursor.field_name().unwrap_or(""))
+        }));
         flat.flags.push(flags);
         flat.parent.push(parents.last().copied().unwrap_or(NONE));
         flat.first_child.push(NONE);
@@ -347,5 +389,23 @@ mod tests {
         let tree = parse("tsx", "const a = <div>{x}</div>;\n");
         let flat = flatten(&tree);
         assert_eq!(flat.flags[0] & FLAG_HAS_ERROR, 0);
+    }
+
+    /// Kinds and fields are interned by grammar id, and several ids can share
+    /// one name (aliases such as C's `field_identifier`). The tables must still
+    /// hold each name once, and every row must still read back its own name.
+    #[test]
+    #[cfg(feature = "lang-c")]
+    fn interned_tables_hold_each_name_once() {
+        let tree = parse(
+            "c",
+            "struct s { int a; };\ntypedef struct s s_t;\nint f(s_t *p) { return p->a + g(p); }\n",
+        );
+        let flat = flatten(&tree);
+        for table in [&flat.kinds, &flat.fields] {
+            let unique: std::collections::HashSet<_> = table.iter().collect();
+            assert_eq!(unique.len(), table.len(), "duplicate name in {table:?}");
+        }
+        assert_mirrors(&flat, tree.root_node(), 0, &mut 0);
     }
 }

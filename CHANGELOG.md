@@ -26,7 +26,12 @@ releases are recorded only in the git tags and history.
 
 ### Performance
 
-- PLACEHOLDER: the clew optimization's entry, filled in from its branch before the release is cut.
+- `flat::flatten`, and so the Python `parse_tree`, is cheaper: node kinds and
+  field names are interned by the grammar's numeric id, so a name is hashed
+  only the first time its id is seen rather than once per node, and the
+  columns are sized from `descendant_count` up front. Output is unchanged.
+  The saving grows with tree size, up to about 25% of flatten time on large
+  C files.
 
 ## 0.11.1 — 2026-10-06
 
