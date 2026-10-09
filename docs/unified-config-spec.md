@@ -105,7 +105,7 @@ Built-in safe defaults are baked in per language; only write what diverges.
 
 ```toml
 [ignore]
-paths = []
+patterns = []
 
 [c.indent]
 style = "spaces"
@@ -215,6 +215,9 @@ fn big_function() { ... }
 
 ### Block region (format pass-through for moldy; can scope other tools too)
 
+knots honours `tools:off` / `tools:on` today. *Proposed:* moldy honouring them, so the `moldy`
+qualifier in the first example does not work yet.
+
 ```c
 /* tools:off moldy */
 int m[] = {1,0,
@@ -243,16 +246,19 @@ int m[] = {1,0,
 
 For a given tool invocation:
 
-1. Locate `toolchain.toml` — walk up from the target path until found. (aurora-lint and moldy do
-   this today, up to the filesystem root.)
+1. Locate `toolchain.toml` — walk up from the target path until found. (aurora-lint does this
+   today from the scan root, up to the filesystem root; moldy walks up from the current working
+   directory instead.)
 2. *Proposed:* load the tool's own config file from the same directory as `toolchain.toml`.
    (knots today finds `knots.toml` on its own, walking up from the current working directory;
    this step would change that.)
 3. *Proposed:* load `suppress.toml` from the same directory. (aurora-lint today reads it from the
    scan root.)
 4. CLI flags override config values (knots thresholds, aurora-lint `--rules`, etc.).
-5. Per-language sections in the tool config override global sections in the tool config,
-   which override `toolchain.toml` language defaults, which override built-in defaults.
+5. Per-language sections in the tool config override global sections in the tool config, which
+   override built-in defaults (knots does this today, e.g. `[c.thresholds]`). *Proposed:*
+   `toolchain.toml` language defaults would sit between the tool's global sections and the
+   built-in defaults.
 
 ---
 
@@ -260,7 +266,8 @@ For a given tool invocation:
 
 | Surface | Target | State |
 |---------|--------|-------|
-| knots `--include` / `--exclude` JSON filter files | `[[filter.exclude]]` in `knots.toml` | Done; the JSON files still work |
+| knots `--exclude` JSON filter file | `[[filter.exclude]]` in `knots.toml` | Done; the JSON file still works |
+| knots `--include` JSON filter file (a whitelist) | an include section in `knots.toml` | Not migrated; `knots.toml` has no include section |
 | knots inline suppress | `tools:suppress knots:METRIC`, `tools:off` | Done |
 | aurora-lint `// AURORA-SUPPRESS:` | `// tools:suppress aurora-lint:RULE HASH:...` | Done; the old form still parses |
 | aurora-lint `.aurora-lint-suppress.toml` / `.sqc-suppress.toml` | `suppress.toml` | Done; the old names are fallbacks |
