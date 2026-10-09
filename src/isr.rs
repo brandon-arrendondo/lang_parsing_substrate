@@ -10,7 +10,7 @@
 //!
 //! Deliberately **not** a name-substring heuristic (`isr`/`irq`/`interrupt`
 //! in the function name): an audit of a real-world embedded firmware
-//! codebase found that name-matching alone produced ~76-80% false
+//! codebase found that name-matching alone produced mostly false
 //! positives, including a plain main-loop function whose name merely
 //! contained `IRQ`. No name-based fallback is offered here —
 //! callers wanting that heuristic as a separate, lower-confidence signal

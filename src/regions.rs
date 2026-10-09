@@ -2,8 +2,7 @@
 //!
 //! See `docs/unified-config-spec.md` for the full comment syntax. This module
 //! covers only the block-region form (`tools:off [TOOL[,TOOL,...]]` /
-//! `tools:on`) — the precursor primitive that knots, moldy, and aurora-lint all
-//! need identically. The richer `tools:suppress TOOL:RULE` single-line syntax
+//! `tools:on`), which knots honours today. The richer `tools:suppress TOOL:RULE` single-line syntax
 //! builds on top of this and is out of scope here.
 
 use crate::registry::SlocMode;
@@ -23,8 +22,8 @@ pub struct IgnoredRegion {
 }
 
 impl IgnoredRegion {
-    /// Whether this region scopes the given tool (e.g. `"knots"`, `"funky"`,
-    /// `"sqc"`). An unqualified `tools:off` (no tool list) scopes every tool.
+    /// Whether this region scopes the given tool (e.g. `"knots"`, `"moldy"`,
+    /// `"aurora-lint"`). An unqualified `tools:off` (no tool list) scopes every tool.
     pub fn applies_to(&self, tool: &str) -> bool {
         match &self.tools {
             None => true,

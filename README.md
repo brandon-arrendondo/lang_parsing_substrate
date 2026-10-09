@@ -11,6 +11,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | Module | Provides |
 |--------|----------|
 | `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
+| `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`looks_like_cpp`, `language_for_header_content`) |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative tree-sitter traversal: `walk_preorder` (one cursor per walk), `find_descendants`, `find_first_descendant`, root-down ancestor lookups (`ancestors`, `find_ancestor_from_root`), linear `child_nodes`, `node_text` |
 | `flat` | A whole parse tree as flat, index-linked columns (`flatten` → `FlatTree`), so a consumer that cannot hold a `tree_sitter::Node` (Python) can still walk every node |
@@ -26,6 +27,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | `dead_code_swift` | Dead-code regions for Swift's `#if`/`#elseif`/`#else` conditional compilation (compile-time-constant boolean conditions only — see module docs for why the C/C++ macro-definedness sub-problem doesn't apply to Swift) |
 | `dead_code_csharp` | Dead-code regions for C#'s `#if`/`#elif`/`#else` conditional compilation — AST-based like `dead_code_swift`, but ports both C/C++ sub-problems (constant conditions and locally-provable `#define`/`#undef` symbol definedness) since C# has real nested preprocessor nodes and real `#define` |
 | `path_ignore` | Compiled glob ignore-pattern sets for path filtering |
+| `isr` | C/C++ interrupt-handler detection (`interrupt_handlers`), with the evidence for each |
 
 Everything below the registry is deliberately per-file: a module extracts what
 one parse tree contains, and leaves assembling a corpus-wide graph, dedup
@@ -64,6 +66,13 @@ the full set.
 | `lang-scala` | Scala | `tree-sitter-scala` |
 | `lang-lua` | Lua | `tree-sitter-lua` |
 | `all-languages` | All of the above | — |
+
+A few modules exist only when the languages they model are compiled in:
+`cpp_header` needs `lang-c` and `lang-cpp`; `dead_code` needs `lang-c`,
+`lang-cpp` or `lang-csharp`; `isr` needs `lang-c` or `lang-cpp`;
+`dead_code_swift` needs `lang-swift`; `dead_code_csharp` needs `lang-csharp`.
+Every other module is always compiled and returns `None` or an empty result
+for a language it does not model.
 
 A consumer that only cares about C/C++, for example, would declare:
 
@@ -140,7 +149,7 @@ classify_calibrate -- ROOT...`.
 ### Analysis primitives
 
 ```rust
-use lang_parsing_substrate::{call_edges, import_sources, build_function_cfg, structural_hash};
+use lang_parsing_substrate::{build_function_cfg, call_edges, detect_min_c_standard, import_sources};
 
 // Call-graph edges for every named function/macro in a parsed file
 let edges = call_edges(tree.root_node(), source);
@@ -149,7 +158,7 @@ let edges = call_edges(tree.root_node(), source);
 let imports = import_sources(&tree, source.as_bytes(), "rust");
 
 // Control-flow graph for a single function body (c/cpp/rust)
-if let Some(cfg) = build_function_cfg(func_node, source, "rust") {
+if let Some(cfg) = build_function_cfg(func_node, source.as_bytes(), "rust") {
     println!("{} basic blocks", cfg.block_count());
 }
 
@@ -165,23 +174,27 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `language_for_file(path: &Path) -> Option<Language>` — grammar dispatch by extension
 - `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key
 - `language_info_for_file(path: &Path) -> Option<&'static LanguageInfo>`
+- `sloc_mode_for_file(path: &Path) -> Option<SlocMode>` — comment style for SLOC counting
+- `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`cpp_header`; needs `lang-c` and `lang-cpp`)
 - `classify` / `classify_file` / `FileClass` / `BinaryKind` / `TextEncoding` / `SourceText` / `ClassifyLimits` — heuristic pre-parse file classification (`classify`)
 - `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates
+- `is_extension_for_language(ext: &OsStr, key: &str) -> bool` — discovery for one language (e.g. C only)
 - `supported_languages_report() -> String` — human-readable language summary
 - `LanguageInfo` / `SlocMode` — registry metadata and comment-style enum (drives SLOC calculation)
-- `find_descendants` / `find_first_descendant` / `find_ancestor` / `node_text` and friends — traversal helpers (`query`)
+- `walk_preorder` / `find_descendants` / `find_first_descendant` / `find_ancestor` / `node_text` and friends — traversal helpers (`query`)
 - `flatten` / `FlatTree` — a whole tree as flat columns (`flat`)
 - `run_query` / `Capture` / `tags_query` — tree-sitter queries and bundled tags queries (`tsquery`)
 - `import_sources` / `distinct_import_count` — import extraction (`imports`)
-- `call_edges` / `CallEdge` / `is_function_kind` / `get_function_name` — call-graph extraction (`calls`)
+- `call_edges` / `CallEdge` / `is_function_kind` / `get_function_name` / `collect_local_names` — call-graph extraction (`calls`)
 - `build_function_cfg` / `FunctionCfg` / `BasicBlock` / `CfgEdge` — control-flow graphs (`cfg`)
 - `detect_min_c_standard` / `CStandard` — C standard lower-bound detection (`c_standard`)
-- `function_fingerprints` / `duplicate_groups` / `Fingerprint` / `CorpusFingerprint` — structural hashing (`fingerprint`)
+- `function_fingerprints` / `block_fingerprints` / `structural_hash` / `duplicate_groups` / `Fingerprint` / `CorpusFingerprint` — structural hashing (`fingerprint`)
 - `ignored_regions` / `IgnoredRegion` — `tools:off`/`tools:on` markers (`regions`)
 - `suppressions` / `Suppression` — `tools:suppress` comments (`suppressions`)
-- `dead_code_ranges` / `DeadCodeRegion` / `DeadCodeReason` — preprocessor dead-code regions, C/C++ only (`dead_code`)
-- `swift_dead_code_regions` / `SwiftDeadCodeRegion` — Swift `#if`/`#elseif`/`#else` dead-code regions (`dead_code_swift`)
-- `csharp_dead_code_regions` / `CSharpDeadCodeRegion` — C# `#if`/`#elif`/`#else` dead-code regions (`dead_code_csharp`)
+- `dead_code_ranges` / `dead_code_ranges_with_assumptions` / `PlatformAssumptions` / `posix_default_assumptions` / `DeadCodeRegion` / `DeadCodeReason` — preprocessor dead-code regions (`dead_code`; needs `lang-c`, `lang-cpp` or `lang-csharp`)
+- `swift_dead_code_regions` / `SwiftDeadCodeRegion` — Swift `#if`/`#elseif`/`#else` dead-code regions (`dead_code_swift`; needs `lang-swift`)
+- `csharp_dead_code_regions` / `CSharpDeadCodeRegion` — C# `#if`/`#elif`/`#else` dead-code regions (`dead_code_csharp`; needs `lang-csharp`)
+- `interrupt_handlers` / `InterruptHandler` / `InterruptEvidence` — interrupt-handler detection (`isr`; needs `lang-c` or `lang-cpp`)
 - `PathIgnore` — compiled glob ignore sets (`path_ignore`)
 
 ## Building
@@ -192,8 +205,8 @@ cargo build --no-default-features --features lang-c,lang-cpp  # subset
 cargo test
 ```
 
-Requires no C compiler — tree-sitter grammar crates ship pre-generated C sources
-and compile via the `cc` crate.
+Needs a C compiler, which the grammar crates call through the `cc` crate, but
+not the tree-sitter CLI: the grammar crates ship pre-generated C sources.
 
 ## Python bindings
 
@@ -218,7 +231,7 @@ pip install target/wheels/lang_parsing_substrate-*.whl
 import lang_parsing_substrate as lps
 
 src = "fn helper(x: i32) -> i32 { x + 1 }\nfn main() { helper(41); }\n"
-edges = lps.call_edges("rust", src)          # [CallEdge(caller='main', callee='helper', ...)]
+edges = lps.call_edges("rust", src)          # [CallEdge]; edges[0].caller == "main"
 cfg = lps.function_cfg("rust", src, "main")  # FunctionCfg | None
 fps = lps.function_fingerprints("rust", src, min_nodes=1)
 caps = lps.query("rust", src, "(function_item name: (identifier) @name)")  # [Capture]
@@ -230,10 +243,13 @@ skip = lps.PathIgnore(["vendor/**"]).is_ignored("vendor/x.c")  # True
 
 Python can't hand this crate a `tree_sitter::Node`/`Tree` directly — this
 crate's `tree-sitter` version has no ABI relationship to tree-sitter's own,
-separate Python bindings — so every bound function takes `(language_key,
-source)`, parses internally, and returns owned data (`CallEdge`,
-`FunctionCfg`, `Fingerprint`, `Suppression`, `IgnoredRegion`, `LanguageInfo`,
-`Capture`, `FlatTree`, all plain attribute-holding classes).
+separate Python bindings — so every function that analyses code takes
+`(language_key, source)`, parses internally, and returns owned data. The
+classes are `CallEdge`, `FunctionCfg`, `BasicBlock`, `Fingerprint`,
+`Suppression`, `IgnoredRegion`, `LanguageInfo`, `Capture`, `FlatTree`,
+`Node`, `FileClass` and `PathIgnore`. `classify` / `classify_file` take a
+path, `PathIgnore` takes glob patterns, and `languages`,
+`supported_languages_report` and `tags_query` take no source.
 
 A consumer that walks the tree itself (e.g. for domain-specific semantics this
 crate doesn't model) uses `parse_tree`. It returns every node, named or not, in
@@ -247,8 +263,10 @@ and links are `lps.NONE` when absent. A node's children are
 native `Node` that answers the walking subset of py-tree-sitter's `Node` API
 (`type`, `children`, `child_by_field_name`, `parent`, siblings, positions,
 `text`, `id`, error flags), so a walker written for py-tree-sitter runs on it
-unchanged. clew parses Python and Rust this way. `parse_tree`, `query` and `function_cfg` also accept
-`"tsx"` for the JSX-aware TypeScript grammar.
+unchanged. clew's development branch parses every grammar this way. Every
+function that takes a language key also accepts `"tsx"` for the JSX-aware
+TypeScript grammar (`function_cfg` returns `None` for it, since CFGs cover
+only C, C++ and Rust).
 
 `invoke build-wheel` builds the wheel locally for testing. The actual PyPI
 release happens in CI on a `vX.Y.Z` tag push, via Trusted Publishing (OIDC,

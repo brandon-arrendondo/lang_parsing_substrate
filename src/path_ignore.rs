@@ -1,8 +1,8 @@
-//! External-config path ignoring — glob patterns from `toolchain.toml`
-//! `[ignore].paths` and per-tool `[<tool>.ignore]` sections.
+//! External-config path ignoring — glob patterns such as `toolchain.toml`'s
+//! `[ignore].paths` (per-tool `[<tool>.ignore]` sections are proposed).
 //!
-//! One glob-matching implementation shared by knots, moldy, and aurora-lint
-//! instead of three reimplementations. See `docs/unified-config-spec.md`.
+//! One glob-matching implementation, used by moldy, aurora-lint and clew's
+//! Python side. See `docs/unified-config-spec.md`.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::Path;

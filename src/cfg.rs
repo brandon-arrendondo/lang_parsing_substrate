@@ -1,12 +1,13 @@
 //! Language-agnostic control-flow graph / basic-block construction on top of
-//! the tree-sitter parse — Tier 3 of the substrate's capability model (see
-//! the crate README/CLAUDE.md). Generalizes the shape of aurora-lint's C-only
-//! CFG builder (`aurora-lint/src/analyze/cfg.rs`) for shared use.
+//! the tree-sitter parse — Tier 3 of the substrate's capability model, after
+//! parsing (Tier 1) and per-file import and call edges (Tier 2). Generalizes
+//! the shape of aurora-lint's C-only CFG builder
+//! (`aurora-lint/src/analyze/cfg.rs`) for shared use.
 //!
 //! v1 scope covers `c`, `cpp`, and `rust`. Like `language_for_file`,
 //! [`build_function_cfg`] never fabricates a result for a language it
 //! doesn't model — it returns `None` rather than a fallback. Extending to
-//! more languages is a matter of adding another [`Shapes`] table entry.
+//! more languages is a matter of adding another `Shapes` table entry.
 //!
 //! Deliberately out of scope for v1 (kept simple to avoid the correctness
 //! risk of guessing at un-verified per-language quirks): `switch`/`match`
@@ -16,8 +17,8 @@
 //! a C-preprocessor-specific concept; a generic constant-folding hook is
 //! left for when a second language needs it).
 //!
-//! This module does not migrate aurora-lint's or knots' existing call sites.
-//! That migration, if ever done, belongs to its own change.
+//! knots builds its CFGs with this module. aurora-lint keeps its own C CFG
+//! builder.
 
 use tree_sitter::Node;
 

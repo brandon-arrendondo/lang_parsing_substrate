@@ -45,7 +45,9 @@ publish, not branch protection.
 
 `X.Y.Z` is the new version.
 
-1. **Bump the version.**
+1. **Bump the version.** `bump-version` edits only `Cargo.toml`; update the
+   three dependency examples in `README.md` (`version = "X.Y.Z"`) by hand, and
+   give the CHANGELOG's Unreleased section the version and date.
 
    ```bash
    invoke bump-version --new-version X.Y.Z

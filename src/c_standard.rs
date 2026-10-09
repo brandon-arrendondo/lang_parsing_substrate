@@ -36,7 +36,8 @@ use tree_sitter::{Node, Tree};
 /// standard than any individual marker implies" guarantee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CStandard {
-    /// No marker requiring a later standard was found.
+    /// A C99-only marker was found (e.g. `restrict` or a designated
+    /// initializer) and none from a later standard.
     C99,
     /// Stands in for "C11 or C17" — C17 is a defect-fix release with no
     /// syntax of its own, so `tree-sitter-c` cannot distinguish the two.

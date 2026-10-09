@@ -1,7 +1,7 @@
 //! Generic AST pattern-matching primitives shared across the substrate's
 //! consumers — a thin "find nodes matching a predicate" query layer over
-//! tree-sitter, generalizing the ad hoc recursive search helpers duplicated
-//! across aurora-lint's ~290 CERT-C rules (see its `utility/cert_c/ast_utils.rs`).
+//! tree-sitter, generalizing the ad hoc recursive search helpers that
+//! aurora-lint's CERT-C rules once duplicated; they now import them from here.
 //!
 //! v1 deliberately stays pattern-language-free: no rule registry, no
 //! severity/violation vocabulary, no DSL. Those are tool-specific (CERT-C
@@ -128,7 +128,7 @@ pub fn find_first_descendant<'a>(
 /// Prefer this, or `node.children(&mut cursor)`, to an index loop:
 /// `Node::child(i)` walks from the first child, so
 /// `for i in 0..n.child_count() { n.child(i) }` is quadratic in the child count
-/// (aurora-lint found about 1,090 such loops).
+/// (aurora-lint found many such loops).
 pub fn child_nodes(node: Node) -> Vec<Node> {
     let mut cursor = node.walk();
     node.children(&mut cursor).collect()

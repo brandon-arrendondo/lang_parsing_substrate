@@ -22,17 +22,17 @@
 //! subtrees with the same kinds in a different shape (e.g. `a` nested three
 //! deep vs. three `a` siblings) must not collide. `std::hash::DefaultHasher`
 //! is used deliberately over `RandomState`-seeded hashing: fingerprints are
-//! meant to be persisted (e.g. aurora-lint's SQLite store) and compared across
+//! meant to be persisted (e.g. knots' duplicate baseline) and compared across
 //! separate process runs, so the hash must be stable, not per-process-random.
 //!
 //! One deliberate exception to "ignore identifier text": the hashed node's
 //! own declared/return type, if its grammar exposes one under a recognized
-//! field name (see [`declared_type_text`]). Two functions with the identical
+//! field name (see `declared_type_text`). Two functions with the identical
 //! "new accumulator, delegate, return" skeleton but different declared
 //! return types (`-> Vec<String>` vs. `-> Vec<RuleViolation>`) previously
 //! hashed identically, since `type_identifier` is the same *kind* regardless
 //! of which name it holds — a real false-positive surfaced by an actual
-//! clone-detection pass on a ~11k-function corpus.
+//! clone-detection pass on a real corpus.
 //! Parameter/variable *names* are still ignored, preserving Type-2
 //! (renamed-identifier) clone matching; only the type annotation's text is
 //! folded in, and only for the top-level node being hashed, not every
@@ -132,8 +132,7 @@ pub struct Fingerprint {
 /// A [`Fingerprint`] tagged with whatever the caller uses to identify its
 /// source file (a path, a DB row id, ...). `S` is left generic rather than
 /// fixed to e.g. `PathBuf` since callers already have their own preferred
-/// file-identifier type (aurora-lint's SQLite store keys by path+mtime;
-/// knots/moldy likely just use a path) and forcing a conversion at this
+/// file-identifier type (knots keys by path) and forcing a conversion at this
 /// boundary would be pure overhead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorpusFingerprint<S> {

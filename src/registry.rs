@@ -4,7 +4,8 @@
 //! (`language_for_header_content`), or by registry key
 //! (`language_for_key`). Also the extension-classification predicates
 //! (`is_source_extension`, `is_parseable_extension`) that drive recursive
-//! file discovery in every consumer (knots, moldy, aurora-lint).
+//! file discovery in knots and moldy, and `is_extension_for_language`, which
+//! aurora-lint uses to discover C files only.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -32,13 +33,13 @@ pub struct LanguageInfo {
     /// Human-facing name, e.g. "C++", "Ada".
     pub name: &'static str,
     /// Canonical machine key — matches the Cargo feature suffix and config-file
-    /// section names (e.g. `[funky.cpp]`, `[knots.csharp.thresholds]`).
+    /// section names (e.g. `[c.thresholds]` in knots.toml).
     /// Always lowercase ASCII; e.g. `"cpp"`, `"csharp"`, `"javascript"`.
     pub key: &'static str,
     /// Extensions used during recursive discovery (no leading dot).
     pub extensions: &'static [&'static str],
     /// Extensions parsed only when a file is passed explicitly — never
-    /// discovered recursively (e.g. headers, fixed-form Fortran).
+    /// discovered recursively (e.g. C's `.h` headers).
     pub explicit_only: &'static [&'static str],
     /// Comment style for this language.
     pub sloc_mode: SlocMode,
@@ -384,8 +385,8 @@ pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
 }
 
 /// Returns `true` if the substrate can parse files with `ext` — includes both
-/// recursive-discovery extensions and explicit-only ones (headers, fixed-form
-/// Fortran), across *every* compiled-in language.
+/// recursive-discovery extensions and explicit-only ones (e.g. headers),
+/// across *every* compiled-in language.
 ///
 /// A consumer that only ever wants to discover files for one specific
 /// language (or a fixed set), and enables other `lang-*` features purely for

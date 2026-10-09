@@ -43,8 +43,8 @@
 //! invisible to the parser, but the brace itself is real text) — tree-sitter
 //! error recovery then mis-nests everything that follows, which is exactly
 //! the construct this feature exists to handle. A plain-text line scanner
-//! sidesteps that entirely, the same way [`crate::suppressions`] and
-//! [`crate::regions`] do.
+//! sidesteps that entirely, the same way [`mod@crate::suppressions`] and
+//! [`mod@crate::regions`] do.
 //!
 //! `#define`/`#undef` tracking counts a directive as long as it isn't inside
 //! a branch this scanner has already proven dead — not C brace/scope

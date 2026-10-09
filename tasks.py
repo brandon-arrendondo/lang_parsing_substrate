@@ -29,11 +29,12 @@ def _read_cargo_version():
 
 @task
 def bump_version(c, new_version=None):
-    """Bump version across all files that reference it.
+    """Bump the crate version in Cargo.toml.
 
-    Reads the current version from Cargo.toml, then updates it there and in
-    any other files that embed a version pin. If --new-version is omitted,
-    prints the current version and the list of files that would be changed.
+    Reads the current version from Cargo.toml and updates it there only. The
+    README's dependency examples pin a version too and are edited by hand
+    (see docs/releasing.md). If --new-version is omitted, prints the current
+    version and the files that would be changed.
 
     Args:
         new_version: Target version string, e.g. 0.2.0 (no leading 'v').
@@ -106,7 +107,8 @@ def build(c, release=False):
 
 @task
 def test(c):
-    """Run all tests across all feature combinations."""
+    """Run the tests with all features, then the C/C++-only subset, then the
+    Python binding tests if a wheel is installed."""
     c.run("cargo test --all-features", pty=True)
     c.run(
         "cargo test --no-default-features --features lang-c,lang-cpp",
