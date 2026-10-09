@@ -1,6 +1,32 @@
 # Changelog
 
-All notable changes to this crate are documented here.
+Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
+releases are recorded only in the git tags and history.
+
+## Unreleased
+
+### Changed
+
+- The copyright holder is BISSELL Homecare, Inc. The licence is still MIT.
+- The Python package metadata uses an SPDX licence expression
+  (`License-Expression: MIT`) and ships `LICENSE` in the wheel and sdist
+  (PEP 639). Building from source needs maturin 1.9.3 or later.
+- Each tagged release now publishes, as GitHub Release assets, a CycloneDX
+  SBOM (`lang-parsing-substrate-X.Y.Z.cdx.json`) and a third-party licence
+  file. Both describe the PyPI wheel's build: the default language set plus
+  the Python bindings.
+
+### Fixed
+
+- Documentation: the README's analysis example now compiles, the module and
+  API lists cover every public module and export (including which need which
+  language features), the README says a C compiler is needed, and the Python
+  section names every class. Doc comments no longer cite stale tool names or
+  wrong consumers, and `cargo doc` builds without warnings.
+
+### Performance
+
+- PLACEHOLDER: the clew optimization's entry, filled in from its branch before the release is cut.
 
 ## 0.11.1 — 2026-10-06
 
