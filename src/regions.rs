@@ -2,8 +2,9 @@
 //!
 //! See `docs/unified-config-spec.md` for the full comment syntax. This module
 //! covers only the block-region form (`tools:off [TOOL[,TOOL,...]]` /
-//! `tools:on`), which knots honours today. The richer `tools:suppress TOOL:RULE` single-line syntax
-//! builds on top of this and is out of scope here.
+//! `tools:on`), which knots honours today. The richer `tools:suppress
+//! TOOL:RULE` single-line syntax builds on top of this and is out of scope
+//! here.
 
 use crate::registry::SlocMode;
 use std::ops::Range;

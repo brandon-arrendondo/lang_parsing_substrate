@@ -19,7 +19,7 @@ releases are recorded only in the git tags and history.
 ### Fixed
 
 - Documentation: the README's analysis example now compiles, the module and
-  API lists cover every public module and export (including which need which
+  API lists add the missing modules and main exports (including which need which
   language features), the README says a C compiler is needed, and the Python
   section names every class. Doc comments no longer cite stale tool names or
   wrong consumers, and `cargo doc` builds without warnings.

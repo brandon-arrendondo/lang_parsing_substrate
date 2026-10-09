@@ -11,7 +11,7 @@ suppression comments) built on top of a unified `LanguageInfo` registry across
 | Module | Provides |
 |--------|----------|
 | `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
-| `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`looks_like_cpp`, `language_for_header_content`) |
+| `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`looks_like_cpp`; the registry's `language_for_header_content` uses it) |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative tree-sitter traversal: `walk_preorder` (one cursor per walk), `find_descendants`, `find_first_descendant`, root-down ancestor lookups (`ancestors`, `find_ancestor_from_root`), linear `child_nodes`, `node_text` |
 | `flat` | A whole parse tree as flat, index-linked columns (`flatten` → `FlatTree`), so a consumer that cannot hold a `tree_sitter::Node` (Python) can still walk every node |
@@ -175,7 +175,7 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key
 - `language_info_for_file(path: &Path) -> Option<&'static LanguageInfo>`
 - `sloc_mode_for_file(path: &Path) -> Option<SlocMode>` — comment style for SLOC counting
-- `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`cpp_header`; needs `lang-c` and `lang-cpp`)
+- `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`registry` and `cpp_header`; needs `lang-c` and `lang-cpp`)
 - `classify` / `classify_file` / `FileClass` / `BinaryKind` / `TextEncoding` / `SourceText` / `ClassifyLimits` — heuristic pre-parse file classification (`classify`)
 - `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates
 - `is_extension_for_language(ext: &OsStr, key: &str) -> bool` — discovery for one language (e.g. C only)
