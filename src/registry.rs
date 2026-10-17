@@ -41,6 +41,10 @@ pub struct LanguageInfo {
     /// Extensions parsed only when a file is passed explicitly — never
     /// discovered recursively (e.g. C's `.h` headers).
     pub explicit_only: &'static [&'static str],
+    /// Whole file names, matched case-sensitively when the extension does not
+    /// identify the language — `CMakeLists.txt` is CMake, and its `.txt`
+    /// extension says nothing. Checked before `extensions`, so a name here wins.
+    pub filenames: &'static [&'static str],
     /// Comment style for this language.
     pub sloc_mode: SlocMode,
 }
@@ -65,6 +69,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "c",
             extensions: &["c"],
             explicit_only: &["h"],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -74,6 +79,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "cpp",
             extensions: &["cpp", "cc", "cxx", "hpp", "hxx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -83,6 +89,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "rust",
             extensions: &["rs"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -92,6 +99,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "python",
             extensions: &["py"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Python,
         });
 
@@ -101,6 +109,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "javascript",
             extensions: &["js", "mjs", "cjs", "jsx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -110,6 +119,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "typescript",
             extensions: &["ts", "tsx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -119,6 +129,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "ada",
             extensions: &["adb", "ada"],
             explicit_only: &["ads"],
+            filenames: &[],
             sloc_mode: SlocMode::Ada,
         });
 
@@ -128,6 +139,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "go",
             extensions: &["go"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -137,6 +149,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "java",
             extensions: &["java"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -146,6 +159,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "csharp",
             extensions: &["cs"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -155,6 +169,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "kotlin",
             extensions: &["kt", "kts"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -164,6 +179,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "swift",
             extensions: &["swift"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -173,6 +189,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "php",
             extensions: &["php"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -182,6 +199,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "fortran",
             extensions: &["f90", "f95", "f03", "f08", "F90", "F95", "F03", "F08"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Fortran,
         });
 
@@ -191,6 +209,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "scala",
             extensions: &["scala", "sc"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -200,11 +219,77 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "lua",
             extensions: &["lua"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Lua,
+        });
+
+        #[cfg(feature = "lang-bash")]
+        v.push(LanguageInfo {
+            name: "Shell",
+            key: "bash",
+            extensions: &["sh", "bash"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Python,
+        });
+
+        #[cfg(feature = "lang-cmake")]
+        v.push(LanguageInfo {
+            name: "CMake",
+            key: "cmake",
+            extensions: &["cmake"],
+            explicit_only: &[],
+            // Nearly all CMake lives in `CMakeLists.txt`, whose extension is `.txt`.
+            filenames: &["CMakeLists.txt"],
+            sloc_mode: SlocMode::Python,
+        });
+
+        #[cfg(feature = "lang-yaml")]
+        v.push(LanguageInfo {
+            name: "YAML",
+            key: "yaml",
+            extensions: &["yaml", "yml"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Python,
+        });
+
+        #[cfg(feature = "lang-json")]
+        v.push(LanguageInfo {
+            name: "JSON",
+            key: "json",
+            extensions: &["json"],
+            explicit_only: &[],
+            filenames: &[],
+            // JSON has no comments; `Default` strips the `//` and `/* */` that
+            // JSONC-flavoured files carry and is a no-op on strict JSON.
+            sloc_mode: SlocMode::Default,
+        });
+
+        #[cfg(feature = "lang-markdown")]
+        v.push(LanguageInfo {
+            name: "Markdown",
+            key: "markdown",
+            extensions: &["md", "markdown"],
+            explicit_only: &[],
+            filenames: &[],
+            // Markdown has no comment syntax of its own.
+            sloc_mode: SlocMode::Default,
         });
 
         v
     })
+}
+
+/// Returns the tree-sitter `Language` for a whole file name, e.g. `CMakeLists.txt`.
+///
+/// Derived from `LanguageInfo::filenames` rather than from a second hard-coded table,
+/// so a language that declares a file name is reachable through both this and
+/// `languages()` without the two being able to disagree.
+///
+/// Returns `None` when no compiled-in language claims that name.
+pub fn language_for_filename(name: &str) -> Option<Language> {
+    language_for_key(language_info_for_filename(name)?.key)
 }
 
 /// Returns the tree-sitter `Language` for `path` based on its extension.
@@ -212,6 +297,15 @@ pub fn languages() -> &'static [LanguageInfo] {
 /// Returns `None` if the extension is unknown or if the corresponding language
 /// feature was not compiled in.
 pub fn language_for_file(path: &Path) -> Option<Language> {
+    // WHOLE FILE NAME FIRST. `CMakeLists.txt` is CMake and its `.txt` extension says
+    // nothing, so an extension-only lookup can never reach the file that holds almost
+    // all of a project's CMake. Checked ahead of the extension match because a name in
+    // `LanguageInfo::filenames` is a stronger signal than the suffix it happens to carry.
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if let Some(lang) = language_for_filename(name) {
+            return Some(lang);
+        }
+    }
     match path.extension().and_then(|e| e.to_str()) {
         #[cfg(feature = "lang-ada")]
         Some("adb" | "ada" | "ads") => Some(tree_sitter_ada::LANGUAGE.into()),
@@ -265,6 +359,21 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 
         #[cfg(feature = "lang-c")]
         Some("c" | "h") => Some(tree_sitter_c::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-bash")]
+        Some("sh" | "bash") => Some(tree_sitter_bash::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-cmake")]
+        Some("cmake") => Some(tree_sitter_cmake::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-yaml")]
+        Some("yaml" | "yml") => Some(tree_sitter_yaml::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-json")]
+        Some("json") => Some(tree_sitter_json::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-markdown")]
+        Some("md" | "markdown") => Some(tree_sitter_md::LANGUAGE.into()),
 
         _ => None,
     }
@@ -329,6 +438,21 @@ pub fn language_for_key(key: &str) -> Option<Language> {
         #[cfg(feature = "lang-lua")]
         "lua" => Some(tree_sitter_lua::LANGUAGE.into()),
 
+        #[cfg(feature = "lang-bash")]
+        "bash" => Some(tree_sitter_bash::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-cmake")]
+        "cmake" => Some(tree_sitter_cmake::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-yaml")]
+        "yaml" => Some(tree_sitter_yaml::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-json")]
+        "json" => Some(tree_sitter_json::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-markdown")]
+        "markdown" => Some(tree_sitter_md::LANGUAGE.into()),
+
         #[cfg(feature = "lang-php")]
         "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
 
@@ -361,10 +485,40 @@ pub fn language_for_key(key: &str) -> Option<Language> {
 /// without parsing. Returns `None` if the extension is unknown or the
 /// corresponding language feature was not compiled in.
 pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
+    // WHOLE FILE NAME FIRST, for the reason `language_for_file` does it: `CMakeLists.txt`
+    // is CMake and its `.txt` extension says nothing. This function is what `classify`
+    // and `sloc_mode_for_file` resolve through, so a name handled only in
+    // `language_for_file` would parse but classify as nothing — the file would be
+    // readable and still invisible to a consumer that routes through `classify_file`.
+    if let Some(info) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(language_info_for_filename)
+    {
+        return Some(info);
+    }
     let ext = path.extension().and_then(|e| e.to_str())?;
     languages()
         .iter()
         .find(|l| l.extensions.contains(&ext) || l.explicit_only.contains(&ext))
+}
+
+/// Returns the [`LanguageInfo`] that claims a whole file name, e.g. `CMakeLists.txt`.
+///
+/// Returns `None` when no compiled-in language declares that name.
+pub fn language_info_for_filename(name: &str) -> Option<&'static LanguageInfo> {
+    languages().iter().find(|l| l.filenames.contains(&name))
+}
+
+/// Returns `true` if a whole file NAME is in the recursive-discovery set for any
+/// compiled-in language.
+///
+/// The companion to [`is_source_extension`] for languages that live in a named file
+/// rather than behind an extension. A consumer walking a tree must ask both, or it never
+/// reaches `CMakeLists.txt` to classify it — `is_source_extension` sees only `txt`, which
+/// is correctly not a source extension.
+pub fn is_source_filename(name: &str) -> bool {
+    language_info_for_filename(name).is_some()
 }
 
 /// Returns the [`SlocMode`] for `path`.
@@ -529,6 +683,113 @@ mod tests {
                 "duplicate LanguageInfo.key {:?}",
                 lang.key
             );
+        }
+    }
+
+    /// Every language that declares a whole file name resolves from that name through all
+    /// four lookups. The four exist because they serve different callers — a tree-sitter
+    /// `Language` for parsing, a `LanguageInfo` for classification and SLOC, and a
+    /// discovery predicate for a walk — and a name wired into only some of them produces a
+    /// file that parses but classifies as nothing, or one that classifies but is never
+    /// found. That is the exact gap this test was written after finding.
+    #[test]
+    fn a_declared_file_name_resolves_through_every_lookup() {
+        for lang in languages() {
+            for name in lang.filenames {
+                let path = Path::new(name);
+                assert!(
+                    language_for_filename(name).is_some(),
+                    "{name} declared by {} has no tree-sitter Language",
+                    lang.key
+                );
+                assert!(
+                    language_for_file(path).is_some(),
+                    "{name} does not resolve a Language through language_for_file"
+                );
+                assert_eq!(
+                    language_info_for_filename(name).map(|i| i.key),
+                    Some(lang.key),
+                    "{name} resolves to the wrong LanguageInfo"
+                );
+                assert_eq!(
+                    language_info_for_file(path).map(|i| i.key),
+                    Some(lang.key),
+                    "{name} does not classify as {} — classify_file and sloc_mode_for_file \
+                     both resolve through language_info_for_file, so this is the difference \
+                     between a file that parses and a file a consumer can see",
+                    lang.key
+                );
+                assert!(
+                    is_source_filename(name),
+                    "{name} is not discoverable, so a recursive walk never reaches it"
+                );
+            }
+        }
+    }
+
+    /// A declared file name wins over the extension it happens to carry. `CMakeLists.txt`
+    /// must not resolve as whatever claims `txt` (nothing today, which is why the order
+    /// has to be asserted rather than observed).
+    #[test]
+    #[cfg(feature = "lang-cmake")]
+    fn a_declared_name_outranks_its_extension() {
+        assert_eq!(
+            language_info_for_file(Path::new("CMakeLists.txt")).map(|i| i.key),
+            Some("cmake")
+        );
+        assert_eq!(
+            sloc_mode_for_file(Path::new("CMakeLists.txt")),
+            Some(SlocMode::Python),
+            "CMake comments are `#`-prefixed; Default mode would count them as code"
+        );
+        // And the extension alone is still not source, which is what makes the name
+        // mechanism necessary rather than a convenience.
+        assert!(!is_source_extension(std::ffi::OsStr::new("txt")));
+        assert!(!is_source_filename("notes.txt"));
+    }
+
+    /// The five file types added for configuration and scripting each resolve from their
+    /// own extensions. Table-driven so a language added to `LANGUAGES` without a lookup
+    /// arm fails here rather than at a consumer.
+    #[test]
+    fn the_configuration_languages_resolve_from_their_extensions() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            #[cfg(feature = "lang-bash")]
+            ("bash", "Shell", &["deploy.sh", "lib.bash"]),
+            #[cfg(feature = "lang-cmake")]
+            ("cmake", "CMake", &["toolchain.cmake"]),
+            #[cfg(feature = "lang-yaml")]
+            ("yaml", "YAML", &["ci.yaml", "ci.yml"]),
+            #[cfg(feature = "lang-json")]
+            ("json", "JSON", &["tsconfig.json"]),
+            #[cfg(feature = "lang-markdown")]
+            ("markdown", "Markdown", &["README.md", "notes.markdown"]),
+        ];
+        for (key, name, files) in cases {
+            assert!(
+                language_for_key(key).is_some(),
+                "{key} has no language_for_key arm"
+            );
+            assert_eq!(
+                languages().iter().find(|l| l.key == *key).map(|l| l.name),
+                Some(*name)
+            );
+            for file in *files {
+                let path = Path::new(file);
+                assert!(
+                    language_for_file(path).is_some(),
+                    "{file} resolves no Language"
+                );
+                assert_eq!(
+                    language_info_for_file(path).map(|i| i.key),
+                    Some(*key),
+                    "{file} classifies as the wrong language"
+                );
+                assert!(
+                    is_source_extension(path.extension().unwrap()),
+                    "{file}'s extension is not discoverable"
+                );
+            }
         }
     }
 

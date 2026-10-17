@@ -3,6 +3,39 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Added
+
+- Five language grammars: **Shell** (`bash`), **CMake** (`cmake`), **YAML**
+  (`yaml`), **JSON** (`json`) and **Markdown** (`markdown`), each behind its own
+  `lang-*` feature and all in `all-languages`. These are the files that wire a
+  repository together rather than the files it compiles, and a consumer could not
+  see any of them.
+- `LanguageInfo::filenames`, so a language can claim a whole file NAME and not
+  only an extension, with four lookups honouring it: `language_for_filename` and
+  `language_info_for_filename` (new), and `language_for_file` and
+  `language_info_for_file`, which both check the name before the extension.
+  `CMakeLists.txt` holds nearly all of a project's CMake and its `.txt` extension
+  says nothing, so an extension-only lookup could never reach it. Every list is
+  read off `LanguageInfo` rather than from a second table, so they cannot
+  disagree, and every existing language declares an empty list.
+- `registry::is_source_filename`, the companion to `is_source_extension` for a
+  language that lives in a named file. A consumer walking a tree must ask both or
+  it never reaches `CMakeLists.txt` to classify it: `is_source_extension` sees
+  only `txt`, which is correctly not a source extension.
+- `sh`, `bash`, `dash` and `ksh` are recognised shebang interpreters. An
+  extensionless `bin/foo` starting `#!/bin/sh` is the normal shape of a
+  repository's entry points and the extension table can never reach it.
+
+### Changed
+
+- `classify`'s `shebang_hint_and_agreement` test asserted that `x.c` holding
+  `#!/bin/sh` classified as nothing, which held only because `sh` was not a known
+  interpreter. It now asserts the invariant the test's own comment states — a
+  disagreeing shebang is a hint and the extension still wins — against the new
+  behaviour.
+
 ## 0.11.2 — 2026-10-08
 
 ### Changed

@@ -39,6 +39,11 @@ tree-sitter-php                 = { version = "0.24", optional = true }
 tree-sitter-fortran             = { version = "0.6",  optional = true }
 tree-sitter-scala               = { version = "0.26", optional = true }
 tree-sitter-lua                 = { version = "0.5",  optional = true }
+tree-sitter-bash                = { version = "0.25", optional = true }
+tree-sitter-cmake               = { version = "0.7",  optional = true }
+tree-sitter-yaml                = { version = "0.7",  optional = true }
+tree-sitter-json                = { version = "0.24", optional = true }
+tree-sitter-md                  = { version = "0.5",  optional = true }
 globset = "0.4"
 infer = { version = "~0.22", default-features = false }
 
@@ -59,6 +64,11 @@ lang-php        = ["dep:tree-sitter-php"]
 lang-fortran    = ["dep:tree-sitter-fortran"]
 lang-scala      = ["dep:tree-sitter-scala"]
 lang-lua        = ["dep:tree-sitter-lua"]
+lang-bash       = ["dep:tree-sitter-bash"]
+lang-cmake      = ["dep:tree-sitter-cmake"]
+lang-yaml       = ["dep:tree-sitter-yaml"]
+lang-json       = ["dep:tree-sitter-json"]
+lang-markdown   = ["dep:tree-sitter-md"]
 pyo3            = ["dep:pyo3"]
 
 all-languages = [
@@ -66,5 +76,6 @@ all-languages = [
     "lang-javascript", "lang-typescript", "lang-go", "lang-java",
     "lang-csharp", "lang-kotlin", "lang-swift", "lang-php",
     "lang-fortran", "lang-scala", "lang-lua",
+    "lang-bash", "lang-cmake", "lang-yaml", "lang-json", "lang-markdown",
 ]
 default = ["all-languages"]

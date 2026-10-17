@@ -518,6 +518,9 @@ fn shebang_key(line: &str) -> Option<&'static str> {
     let name = interp.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
     Some(match name {
         "python" | "pypy" => "python",
+        // An extensionless `bin/foo` with `#!/bin/sh` is the normal shape of a repo's
+        // entry points, and the extension table can never reach it.
+        "sh" | "bash" | "dash" | "ksh" => "bash",
         "node" | "nodejs" | "bun" => "javascript",
         "deno" | "ts-node" | "tsx" => "typescript",
         "lua" | "luajit" => "lua",
@@ -907,7 +910,64 @@ mod tests {
             text("page", b"\n<?php echo 1;").by_content.unwrap().key,
             "php"
         );
-        assert!(text("x.c", b"#!/bin/sh\n").by_content.is_none());
+        // `sh` is now a known interpreter, so this file's shebang DOES classify — and the
+        // assertion moves to the invariant the comment above states rather than being
+        // dropped: a disagreeing shebang is a hint, and the extension still wins.
+        #[cfg(all(feature = "lang-bash", feature = "lang-c"))]
+        {
+            let t = text("x.c", b"#!/bin/sh\n");
+            assert_eq!(t.by_content.unwrap().key, "bash");
+            assert_eq!(t.extension_agrees(), Some(false));
+            assert_eq!(t.likely_language().unwrap().key, "c");
+        }
+    }
+
+    /// An extensionless `bin/foo` with a shell shebang is the normal shape of a
+    /// repository's entry points — a launcher, a deploy script, a wrapper — and no
+    /// extension table can reach it. Each interpreter is asserted separately because the
+    /// alias list is hand-written and a missing entry is silent: the file still
+    /// classifies as source text, just with no language, which reads downstream as
+    /// "nothing here" rather than "not supported".
+    #[test]
+    #[cfg(feature = "lang-bash")]
+    fn a_shell_shebang_classifies_an_extensionless_script() {
+        for line in [
+            &b"#!/bin/sh\n"[..],
+            &b"#!/bin/bash\n"[..],
+            &b"#!/usr/bin/env bash\n"[..],
+            &b"#!/bin/dash\n"[..],
+            &b"#!/bin/ksh\n"[..],
+        ] {
+            let mut src = line.to_vec();
+            src.extend_from_slice(b"main() {\n  echo hi\n}\n");
+            let t = text("sumac-connect", &src);
+            assert!(
+                t.by_extension.is_none(),
+                "the file has no extension to read"
+            );
+            assert_eq!(
+                t.by_content.map(|i| i.key),
+                Some("bash"),
+                "{} did not classify as shell",
+                String::from_utf8_lossy(line).trim()
+            );
+            assert_eq!(t.likely_language().map(|i| i.key), Some("bash"));
+            assert_eq!(
+                t.extension_agrees(),
+                None,
+                "there is no extension, so agreement is not a question that has an answer"
+            );
+        }
+    }
+
+    /// A `.sh` file and its shebang agree, which is the ordinary case and the one that
+    /// would silently keep working if the alias list were wrong.
+    #[test]
+    #[cfg(feature = "lang-bash")]
+    fn an_extension_and_a_shell_shebang_agree() {
+        let t = text("deploy.sh", b"#!/bin/bash\necho hi\n");
+        assert_eq!(t.by_extension.map(|i| i.key), Some("bash"));
+        assert_eq!(t.extension_agrees(), Some(true));
     }
 
     #[test]

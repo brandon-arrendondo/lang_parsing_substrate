@@ -24,6 +24,11 @@ fn snippet_for(key: &str) -> &'static str {
         "fortran" => "program main\nend program main\n",
         "scala" => "object Main { def main(args: Array[String]): Unit = {} }\n",
         "lua" => "function main() end\n",
+        "bash" => "main() {\n  echo hi\n}\n",
+        "cmake" => "function(main)\n  set(X 1)\nendfunction()\n",
+        "yaml" => "main:\n  key: value\n",
+        "json" => "{\"main\": 1}\n",
+        "markdown" => "# main\n\ntext\n",
         other => panic!("no smoke-test snippet registered for language key {other:?}"),
     }
 }
