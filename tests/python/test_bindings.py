@@ -82,7 +82,9 @@ def test_is_discoverable_file():
 
 
 def test_markdown_sections_and_front_matter():
-    src = "---\ntitle: x\n---\n\nIntro.\n\n# One #\n\n```\n# no\n```\n\nTwo\n===\n"
+    # Offsets are UTF-8 byte offsets: slice the encoded source, not the str.
+    src = "---\ntitle: café\n---\n\nIntro é.\n\n# One #\n\n```\n# no\n```\n\nTwo\n===\n"
+    raw = src.encode()
     secs = lps.markdown_sections(src)
     assert [(s.level, s.heading_text, s.start_line, s.end_line) for s in secs] == [
         (0, "", 4, 6),
@@ -90,11 +92,12 @@ def test_markdown_sections_and_front_matter():
         (1, "Two", 13, 14),
     ]
     one = secs[1]
-    assert src[one.start_byte : one.heading_end_byte] == "# One #\n"
-    assert "# no" in src[one.heading_end_byte : one.end_byte]
+    assert raw[one.start_byte : one.heading_end_byte] == b"# One #\n"
+    assert b"# no" in raw[one.heading_end_byte : one.end_byte]
+    assert secs[-1].end_byte == len(raw)
     fm = lps.markdown_front_matter(src)
     assert (fm.kind, fm.start_line, fm.end_line) == ("yaml", 1, 3)
-    assert src[fm.body_start_byte : fm.body_end_byte] == "title: x\n"
+    assert raw[fm.body_start_byte : fm.body_end_byte] == "title: café\n".encode()
     assert lps.markdown_front_matter("# A\n") is None
 
 

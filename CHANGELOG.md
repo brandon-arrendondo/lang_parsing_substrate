@@ -39,15 +39,20 @@ releases are recorded only in the git tags and history.
     a section. A non-blank preamble before the first heading is level 0.
   - `front_matter(root, source)` returns the opening `---` (YAML) or `+++`
     (TOML) block, kept separate from the sections, with its body range.
-  - `ContentMap` records, per row, where content starts after container
-    prefixes (`> `, list indentation, and list and quote markers), and
-    `content_lines(node, source)` returns a node's rows without them, so a
-    node's text can be re-parsed with `markdown_inline`.
+  - `ContentMap::new(root, source)` records, per row, where content starts
+    after container prefixes (`> `, list indentation, and list and quote
+    markers). `ContentMap::content_start(row)` returns that byte, and
+    `ContentMap::content_lines(node, source)` returns a node's rows without
+    the prefixes, so a node's text can be re-parsed with `markdown_inline`.
+  - `FrontMatterKind` (`Yaml` / `Toml`) says which front-matter syntax was
+    found. `Section`, `FrontMatter` and `FrontMatterKind` are
+    `#[non_exhaustive]`, so later additions to them aren't breaking.
   - Python: `markdown_sections(source)` returns `MarkdownSection` objects
     (`level`, `heading_text`, `start_line`, `end_line`, `start_byte`,
     `end_byte`, `heading_end_byte`), and `markdown_front_matter(source)`
     returns a `FrontMatter` (`kind` `"yaml"` / `"toml"`, lines, bytes, body
-    bytes) or `None`.
+    bytes) or `None`. Offsets are UTF-8 byte offsets, so slice
+    `source.encode()`, not the `str`.
   - Known gap: where the grammar closes a code fence early, on a
     delimiter-like line that CommonMark would not accept, a later heading can
     be missed. Across about 6,000 real-world files this affected about 0.1%
@@ -75,6 +80,17 @@ releases are recorded only in the git tags and history.
   literal must set `filenames`.
 - `SlocMode` has two new variants, so an exhaustive `match` on it needs arms
   for them (knots matches on it).
+
+### Changed
+
+- The Python wheel is built with `all-data-languages`, so its behaviour
+  changes on upgrade: `languages()`, `is_source_extension` and
+  `is_discoverable_file` now include YAML, JSON, Markdown, CMake and Bash
+  (`.yaml`, `.yml`, `.json`, `.jsonc`, `.md`, `.markdown`, `.cmake`,
+  `CMakeLists.txt`, `.sh`, `.bash`), and `classify` gives a file starting
+  `#!/bin/sh` (or `bash`, `dash`, `ksh`) a `bash` content hint. A Python
+  consumer that discovers files from these sees the new files. Rust builds
+  with the default features are unchanged.
 
 ## 0.11.2 — 2026-10-08
 

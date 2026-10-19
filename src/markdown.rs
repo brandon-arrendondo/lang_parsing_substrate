@@ -69,6 +69,10 @@ impl ContentMap {
 
     /// Byte where content starts on `row` (0-indexed), after any container
     /// prefix.
+    ///
+    /// # Panics
+    ///
+    /// If `row` is past the last row of the source the map was built from.
     pub fn content_start(&self, row: usize) -> usize {
         self.content_starts[row]
     }
@@ -111,6 +115,7 @@ impl ContentMap {
 
 /// A document-level heading and the text up to the next one.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Section {
     /// 1–6 for a heading; 0 for the preamble, the text before the first
     /// heading (after any front matter), reported only when it is not blank.
@@ -246,6 +251,7 @@ fn strip_closing_sequence(text: &str) -> &str {
 
 /// Front-matter syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FrontMatterKind {
     /// `---` delimiters.
     Yaml,
@@ -255,6 +261,7 @@ pub enum FrontMatterKind {
 
 /// Metadata block at the very start of a Markdown document.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrontMatter {
     /// `---` (YAML) or `+++` (TOML).
     pub kind: FrontMatterKind,

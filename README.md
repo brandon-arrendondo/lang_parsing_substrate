@@ -258,6 +258,9 @@ cfg = lps.function_cfg("rust", src, "main")  # FunctionCfg | None
 fps = lps.function_fingerprints("rust", src, min_nodes=1)
 caps = lps.query("rust", src, "(function_item name: (identifier) @name)")  # [Capture]
 tags = lps.tags_query("tsx")                 # the grammar's bundled tags query, or None
+md = "# Title\n\nBody.\n"
+secs = lps.markdown_sections(md)             # [MarkdownSection]; offsets are UTF-8 bytes:
+body = md.encode()[secs[0].heading_end_byte : secs[0].end_byte]  # slice the encoded text
 tree = lps.parse_tree("rust", src.encode())  # FlatTree: every node as columns
 cls = lps.classify_file("src/main.rs", max_size=4 << 20)  # FileClass: kind, encoding, ...
 skip = lps.PathIgnore(["vendor/**"]).is_ignored("vendor/x.c")  # True

@@ -515,7 +515,7 @@ pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
 /// `CMakeLists.txt`), or its extension is a recursive-discovery extension
 /// ([`is_source_extension`]). Explicit-only extensions (C's `.h`) are not
 /// discoverable. Looks at the path only; extensionless scripts need
-/// [`crate::classify`]'s shebang hint.
+/// [`crate::classify()`]'s shebang hint.
 pub fn is_discoverable_file(path: &Path) -> bool {
     let named = path
         .file_name()
