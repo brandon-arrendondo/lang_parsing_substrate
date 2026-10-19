@@ -4,13 +4,14 @@ A shared language-parsing substrate for static-analysis tools: tree-sitter gramm
 dispatch, language detection, and a growing set of language-agnostic analysis
 primitives (import/call graphs, control-flow graphs, structural fingerprinting,
 suppression comments) built on top of a unified `LanguageInfo` registry across
-16 languages — compiled in at build time via Cargo feature flags.
+16 programming languages, plus YAML, JSON, Markdown and CMake — compiled in at
+build time via Cargo feature flags.
 
 ## What's in the substrate
 
 | Module | Provides |
 |--------|----------|
-| `registry` | Language detection by extension, the `LanguageInfo` table, SLOC comment-style metadata |
+| `registry` | Language detection by file name and extension, the `LanguageInfo` table, SLOC comment-style metadata |
 | `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`looks_like_cpp`; the registry's `language_for_header_content` uses it) |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative tree-sitter traversal: `walk_preorder` (one cursor per walk), `find_descendants`, `find_first_descendant`, root-down ancestor lookups (`ancestors`, `find_ancestor_from_root`), linear `child_nodes`, `node_text` |
@@ -36,16 +37,19 @@ narrow (one authoritative, correct answer per file) and lets each consumer
 choose its own storage model (in-memory, SQLite, whatever) without the
 substrate needing to know about it.
 
-Language coverage varies by module — the registry knows about all 16
-languages, but modules like `cfg` only model the languages they've been
+Language coverage varies by module — the registry knows about every
+compiled-in language, but modules like `cfg` only model the languages they've been
 built out for. A module never fabricates a result for a language it doesn't
 support; it returns `None` (or an empty result) instead of guessing.
 
 ## Feature flags
 
-Not every consumer needs all 16 languages. Each language is an optional Cargo
+Not every consumer needs every language. Each language is an optional Cargo
 feature; the `all-languages` convenience feature (enabled by default) pulls in
-the full set.
+the 16 programming languages. The data, markup and build-file languages sit in
+a separate `all-data-languages` group that is not on by default, so a consumer
+that discovers files from `languages()` (as knots does) doesn't start picking
+up every `.json`, `.yml` and `README.md`. The Python wheel enables both.
 
 | Feature | Language | Grammar crate |
 |---------|----------|---------------|
@@ -66,6 +70,19 @@ the full set.
 | `lang-scala` | Scala | `tree-sitter-scala` |
 | `lang-lua` | Lua | `tree-sitter-lua` |
 | `all-languages` | All of the above | — |
+| `lang-yaml` | YAML | `tree-sitter-yaml` |
+| `lang-json` | JSON (also `.jsonc`) | `tree-sitter-json` |
+| `lang-markdown` | Markdown | `tree-sitter-md` |
+| `lang-cmake` | CMake (`CMakeLists.txt`, `.cmake`) | `tree-sitter-cmake` |
+| `all-data-languages` | YAML, JSON, Markdown, CMake | — |
+
+Two of these don't map one file to one grammar by extension. CMake is matched
+mostly by file name: `CMakeLists.txt` is listed in `LanguageInfo::filenames`
+and checked ahead of the extension, so other `.txt` files stay unknown.
+Markdown is two grammars: `markdown` parses the block structure, and leaves
+paragraph and heading text as `inline` nodes; re-parse those ranges with the
+`markdown_inline` grammar (`language_for_key("markdown_inline")`) for links,
+emphasis and code spans.
 
 A few modules exist only when the languages they model are compiled in:
 `cpp_header` needs `lang-c` and `lang-cpp`; `dead_code` needs `lang-c`,
@@ -171,8 +188,8 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 ## API
 
 - `languages() -> &'static [LanguageInfo]` — compiled-in language set
-- `language_for_file(path: &Path) -> Option<Language>` — grammar dispatch by extension
-- `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key
+- `language_for_file(path: &Path) -> Option<Language>` — grammar dispatch by file name, then extension
+- `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key (plus the grammar-only keys `tsx` and `markdown_inline`)
 - `language_info_for_file(path: &Path) -> Option<&'static LanguageInfo>`
 - `sloc_mode_for_file(path: &Path) -> Option<SlocMode>` — comment style for SLOC counting
 - `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`registry` and `cpp_header`; needs `lang-c` and `lang-cpp`)

@@ -39,6 +39,12 @@ tree-sitter-php                 = { version = "0.24", optional = true }
 tree-sitter-fortran             = { version = "0.6",  optional = true }
 tree-sitter-scala               = { version = "0.26", optional = true }
 tree-sitter-lua                 = { version = "0.5",  optional = true }
+tree-sitter-yaml                = { version = "0.7",  optional = true }
+tree-sitter-json                = { version = "0.24", optional = true }
+# Without its `parser` feature, tree-sitter-md exposes the block and inline
+# grammars only and doesn't pull in its own (newer) tree-sitter.
+tree-sitter-md                  = { version = "0.5",  optional = true }
+tree-sitter-cmake               = { version = "0.7",  optional = true }
 globset = "0.4"
 infer = { version = "~0.22", default-features = false }
 
@@ -59,6 +65,10 @@ lang-php        = ["dep:tree-sitter-php"]
 lang-fortran    = ["dep:tree-sitter-fortran"]
 lang-scala      = ["dep:tree-sitter-scala"]
 lang-lua        = ["dep:tree-sitter-lua"]
+lang-yaml       = ["dep:tree-sitter-yaml"]
+lang-json       = ["dep:tree-sitter-json"]
+lang-markdown   = ["dep:tree-sitter-md"]
+lang-cmake      = ["dep:tree-sitter-cmake"]
 pyo3            = ["dep:pyo3"]
 
 all-languages = [
@@ -67,4 +77,8 @@ all-languages = [
     "lang-csharp", "lang-kotlin", "lang-swift", "lang-php",
     "lang-fortran", "lang-scala", "lang-lua",
 ]
+# Data, markup and build-file languages. Kept out of `all-languages` (and so
+# out of the defaults): a consumer that discovers files from `languages()`
+# would otherwise start picking up every `.json`, `.yml` and `README.md`.
+all-data-languages = ["lang-yaml", "lang-json", "lang-markdown", "lang-cmake"]
 default = ["all-languages"]

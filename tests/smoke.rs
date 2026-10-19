@@ -24,6 +24,10 @@ fn snippet_for(key: &str) -> &'static str {
         "fortran" => "program main\nend program main\n",
         "scala" => "object Main { def main(args: Array[String]): Unit = {} }\n",
         "lua" => "function main() end\n",
+        "yaml" => "name: main\nitems: [a, b]\n",
+        "json" => "{\"name\": \"main\", \"items\": [1, 2]}\n",
+        "markdown" => "# Main\n\nSome *text* and a [link](other.md).\n",
+        "cmake" => "cmake_minimum_required(VERSION 3.20)\nadd_library(main main.c)\n",
         other => panic!("no smoke-test snippet registered for language key {other:?}"),
     }
 }
@@ -33,24 +37,53 @@ fn every_compiled_in_language_parses_a_valid_snippet() {
     for lang in lang_parsing_substrate::languages() {
         let ext = lang.extensions[0];
         let path = Path::new("smoke").with_extension(ext);
-        let language = lang_parsing_substrate::language_for_file(&path)
-            .unwrap_or_else(|| panic!("{} (.{ext}) did not resolve to a grammar", lang.name));
-
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&language)
-            .unwrap_or_else(|e| panic!("{}: failed to load grammar: {e}", lang.name));
-
-        let source = snippet_for(lang.key);
-        let tree = parser
-            .parse(source, None)
-            .unwrap_or_else(|| panic!("{}: parser returned no tree", lang.name));
-
-        assert!(
-            !tree.root_node().has_error(),
-            "{} snippet failed to parse cleanly:\n{source}\n{}",
-            lang.name,
-            tree.root_node().to_sexp()
-        );
+        assert_parses_cleanly(lang.name, &path, snippet_for(lang.key));
     }
+}
+
+/// `markdown_inline` and `CMakeLists.txt` are reached through `language_for_key`
+/// and a file name, not through a registered extension, so the loop above
+/// doesn't see them.
+#[cfg(feature = "lang-markdown")]
+#[test]
+fn markdown_inline_grammar_parses_inline_text() {
+    let language = lang_parsing_substrate::language_for_key("markdown_inline").unwrap();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).unwrap();
+    let tree = parser
+        .parse("Some *text* and a [link](other.md).", None)
+        .unwrap();
+    let root = tree.root_node();
+    assert!(!root.has_error(), "{}", root.to_sexp());
+    assert!(root.to_sexp().contains("inline_link"), "{}", root.to_sexp());
+}
+
+#[cfg(feature = "lang-cmake")]
+#[test]
+fn cmakelists_parses_by_file_name() {
+    assert_parses_cleanly(
+        "CMake",
+        Path::new("sub/CMakeLists.txt"),
+        snippet_for("cmake"),
+    );
+}
+
+fn assert_parses_cleanly(name: &str, path: &Path, source: &str) {
+    let language = lang_parsing_substrate::language_for_file(path)
+        .unwrap_or_else(|| panic!("{name} ({}) did not resolve to a grammar", path.display()));
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&language)
+        .unwrap_or_else(|e| panic!("{name}: failed to load grammar: {e}"));
+
+    let tree = parser
+        .parse(source, None)
+        .unwrap_or_else(|| panic!("{name}: parser returned no tree"));
+
+    assert!(
+        !tree.root_node().has_error(),
+        "{name} snippet failed to parse cleanly:\n{source}\n{}",
+        tree.root_node().to_sexp()
+    );
 }

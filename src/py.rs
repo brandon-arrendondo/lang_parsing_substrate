@@ -52,12 +52,13 @@ fn parse(language_key: &str, source: &[u8]) -> PyResult<tree_sitter::Tree> {
 }
 
 fn sloc_mode_for_key(language_key: &str) -> PyResult<registry::SlocMode> {
-    // `tsx` is a grammar key (`language_for_key`) but not a `LanguageInfo` key:
-    // the registry files `.tsx` under `typescript`, whose comment syntax it shares.
-    let info_key = if language_key == "tsx" {
-        "typescript"
-    } else {
-        language_key
+    // `tsx` and `markdown_inline` are grammar keys (`language_for_key`) but not
+    // `LanguageInfo` keys: the registry files them under `typescript` and
+    // `markdown`, whose comment syntax they share.
+    let info_key = match language_key {
+        "tsx" => "typescript",
+        "markdown_inline" => "markdown",
+        _ => language_key,
     };
     registry::languages()
         .iter()
@@ -77,6 +78,8 @@ struct PyLanguageInfo {
     extensions: Vec<String>,
     #[pyo3(get)]
     explicit_only: Vec<String>,
+    #[pyo3(get)]
+    filenames: Vec<String>,
 }
 
 impl From<&LanguageInfo> for PyLanguageInfo {
@@ -86,6 +89,7 @@ impl From<&LanguageInfo> for PyLanguageInfo {
             key: info.key.to_string(),
             extensions: info.extensions.iter().map(|s| s.to_string()).collect(),
             explicit_only: info.explicit_only.iter().map(|s| s.to_string()).collect(),
+            filenames: info.filenames.iter().map(|s| s.to_string()).collect(),
         }
     }
 }

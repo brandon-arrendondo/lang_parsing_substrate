@@ -47,6 +47,8 @@ fn comment_syntax(
         SlocMode::Ada => (&["--"], None),
         SlocMode::Lua => (&["--"], Some(("--[[", "]]"))),
         SlocMode::Fortran => (&["!"], None),
+        SlocMode::Hash => (&["#"], None),
+        SlocMode::Markdown => (&[], Some(("<!--", "-->"))),
     }
 }
 
@@ -210,6 +212,23 @@ mod tests {
         let src = "! tools:off\nx\n! tools:on\n";
         let regions = ignored_regions(src, SlocMode::Fortran);
         assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn hash_and_markdown_comments() {
+        let src = "# tools:off\nkey: value\n# tools:on\n";
+        assert_eq!(ignored_regions(src, SlocMode::Hash).len(), 1);
+        // `Hash` is `#` only: no C-style comments.
+        let src = "// tools:off\nkey: value\n// tools:on\n";
+        assert!(ignored_regions(src, SlocMode::Hash).is_empty());
+
+        let src = "<!-- tools:off -->\n| a | b |\n<!-- tools:on -->\n";
+        let regions = ignored_regions(src, SlocMode::Markdown);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].line_range, 1..3);
+        // A Markdown heading is not a comment.
+        let src = "# tools:off\ntext\n# tools:on\n";
+        assert!(ignored_regions(src, SlocMode::Markdown).is_empty());
     }
 
     #[test]

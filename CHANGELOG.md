@@ -3,6 +3,37 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Added
+
+- YAML (`lang-yaml`: `.yaml`, `.yml`), JSON (`lang-json`: `.json`, `.jsonc`),
+  Markdown (`lang-markdown`: `.md`, `.markdown`) and CMake (`lang-cmake`:
+  `CMakeLists.txt`, `.cmake`), each with its grammar re-exported. They are
+  grouped under a new `all-data-languages` feature that is **not** part of
+  `all-languages` or the defaults, so a consumer that discovers files from
+  `languages()` doesn't start picking up every `.json`, `.yml` and
+  `README.md`. The Python wheel enables both groups.
+- `LanguageInfo::filenames`: exact file names that belong to a language
+  whatever their extension. `language_for_file` and `language_info_for_file`
+  check it ahead of the extension; `CMakeLists.txt` is the first entry, and
+  other `.txt` files stay unknown. `supported_languages_report` lists the
+  names, and the Python `LanguageInfo` has a `filenames` attribute.
+- `language_for_key("markdown_inline")`: Markdown's inline grammar. The
+  `markdown` grammar leaves paragraph and heading text as `inline` nodes;
+  re-parse their ranges with it for links, emphasis and code spans. Like
+  `tsx`, it is a grammar key with no `LanguageInfo` of its own.
+- `SlocMode::Hash` (`#` comments: YAML, CMake) and `SlocMode::Markdown`
+  (single-line `<!-- … -->`), which `regions` and `suppressions` recognise.
+  JSON uses `SlocMode::Default`, matching `.jsonc`'s `//` and `/* */`.
+
+### Changed (breaking)
+
+- `LanguageInfo` has a new public field, so code that builds one with a struct
+  literal must set `filenames`.
+- `SlocMode` has two new variants, so an exhaustive `match` on it needs arms
+  for them (knots matches on it).
+
 ## 0.11.2 — 2026-10-08
 
 ### Changed

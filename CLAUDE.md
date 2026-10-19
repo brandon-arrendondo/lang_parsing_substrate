@@ -4,8 +4,8 @@
 
 Shared Rust **library crate** — the common parsing substrate for knots, moldy, aurora-lint, and
 clew. Provides language detection, tree-sitter grammar dispatch, a `LanguageInfo` registry across
-16 languages (compiled in at build time via Cargo feature flags), and per-file analysis
-primitives built on top of it. Also ships optional PyO3 bindings for Python consumers.
+16 programming languages plus YAML, JSON, Markdown and CMake (compiled in at build time via Cargo
+feature flags), and per-file analysis primitives built on top of it. Also ships optional PyO3 bindings for Python consumers.
 
 ## Repository layout
 
@@ -32,19 +32,20 @@ Feature gates that aren't obvious from the module name:
 
 ## Key invariants
 
-- **`language_for_file` returns `Option<Language>`** — never a fallback. If a language feature is disabled, its extensions return `None`. It is extension-only (no I/O): `.h` always resolves to the C grammar regardless of content. Callers that already have the file's bytes and want best-effort C-vs-C++ disambiguation for `.h` should use `language_for_header_content(path, source)` instead (see `src/cpp_header.rs`) — it defers to `language_for_file` for every other extension and only overrides `.h` when the content contains an unambiguous C++-only construct. Neither looks at whether the file is text at all — consumers that want to skip archives, executables or oversized files before parsing call `classify` / `classify_file` first (heuristic; the caller sets the size limit and the skip policy).
+- **`language_for_file` returns `Option<Language>`** — never a fallback. If a language feature is disabled, its extensions return `None`. It looks at the path only (no I/O): an exact file name from `LanguageInfo::filenames` first (`CMakeLists.txt`), then the extension. `.h` always resolves to the C grammar regardless of content. Callers that already have the file's bytes and want best-effort C-vs-C++ disambiguation for `.h` should use `language_for_header_content(path, source)` instead (see `src/cpp_header.rs`) — it defers to `language_for_file` for every other extension and only overrides `.h` when the content contains an unambiguous C++-only construct. Neither looks at whether the file is text at all — consumers that want to skip archives, executables or oversized files before parsing call `classify` / `classify_file` first (heuristic; the caller sets the size limit and the skip policy).
 - **`languages()` is runtime-constructed** via `OnceLock<Vec<LanguageInfo>>`. It cannot be a `const` because its contents vary by compiled feature set. Do not attempt to make it `const`.
-- **Feature flags are the language gate** — every language is an optional Cargo dep. The `all-languages` feature enables all 16. Consumers use `default-features = false` to opt into a subset (e.g. aurora-lint only needs `lang-c,lang-cpp`).
+- **Feature flags are the language gate** — every language is an optional Cargo dep. The `all-languages` feature (the default) enables the 16 programming languages; `all-data-languages` (YAML, JSON, Markdown, CMake) is separate and off by default, because knots discovers files from `languages()` and has no metric for them. The wheel (`pyproject.toml`) enables both. Consumers use `default-features = false` to opt into a subset (e.g. aurora-lint only needs `lang-c,lang-cpp`).
 - **Grammar re-exports are cfg-gated** — `pub use tree_sitter_rust` is `#[cfg(feature = "lang-rust")]`. Consumers reach grammars transitively without their own direct deps.
 - **Analysis modules are per-file** — a module extracts what one parse tree contains; assembling a corpus-wide graph, dedup report, or metric is the consumer's job.
 
 ## Adding a new language
 
-1. **`Cargo.toml`** — add `tree-sitter-<lang> = { version = "...", optional = true }` and a `lang-<name>` feature under `[features]`. Add it to `all-languages`.
-2. **`src/registry.rs` — `languages()`** — add a `#[cfg(feature = "lang-<name>")] v.push(LanguageInfo { ... })` block.
-3. **`src/registry.rs` — `language_for_file()`** — add a `#[cfg(feature = "lang-<name>")] Some("ext" | ...) => Some(...LANGUAGE.into())` arm. The arms match disjoint extensions, so their order does not change the result; C's arm is last by convention.
+1. **`Cargo.toml`** — add `tree-sitter-<lang> = { version = "...", optional = true }` and a `lang-<name>` feature under `[features]`. Add it to `all-languages`, or to `all-data-languages` for a data, markup or build-file language that knots should not discover.
+2. **`src/registry.rs` — `languages()`** — add a `#[cfg(feature = "lang-<name>")] v.push(LanguageInfo { ... })` block. `filenames` lists exact file names matched whatever their extension (`CMakeLists.txt`); most languages leave it empty.
+3. **`src/registry.rs` — `language_for_file()`** — add a `#[cfg(feature = "lang-<name>")] Some("ext" | ...) => Some(...LANGUAGE.into())` arm. The arms match disjoint extensions, so their order does not change the result; C's arm is last by convention. A language with `filenames` also needs an arm in the file-name `match` above it.
 4. **`src/registry.rs` — `language_for_key()`** — add a `#[cfg(feature = "lang-<name>")] "<key>" => Some(...LANGUAGE.into())` arm. The Python bindings parse through it.
 5. **`src/lib.rs`** — add `#[cfg(feature = "lang-<name>")] pub use tree_sitter_<name>;`
+6. **`tests/smoke.rs`** — add a snippet for the key to `snippet_for`; the smoke test panics on a compiled-in language without one.
 
 ## Testing and commits
 

@@ -1,6 +1,6 @@
 //! The language registry: `LANGUAGES`'s runtime form (`languages()`), and
 //! every lookup consumers use to get from a file to a tree-sitter `Language`
-//! — by extension (`language_for_file`), by sniffed `.h` content
+//! — by file name or extension (`language_for_file`), by sniffed `.h` content
 //! (`language_for_header_content`), or by registry key
 //! (`language_for_key`). Also the extension-classification predicates
 //! (`is_source_extension`, `is_parseable_extension`) that drive recursive
@@ -24,10 +24,15 @@ pub enum SlocMode {
     Lua,
     /// Strips `!` comment lines (free-form Fortran: `.f90`, `.f95`, …).
     Fortran,
+    /// Strips `#` comment lines — YAML and CMake. Unlike [`SlocMode::Python`],
+    /// it implies no `//` or `/* */` syntax.
+    Hash,
+    /// Strips single-line `<!-- … -->` HTML comments (Markdown).
+    Markdown,
 }
 
-/// A language the substrate can parse, with its display name, file extensions,
-/// and comment style.
+/// A language the substrate can parse, with its display name, file extensions
+/// and names, and comment style.
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageInfo {
     /// Human-facing name, e.g. "C++", "Ada".
@@ -41,6 +46,10 @@ pub struct LanguageInfo {
     /// Extensions parsed only when a file is passed explicitly — never
     /// discovered recursively (e.g. C's `.h` headers).
     pub explicit_only: &'static [&'static str],
+    /// Exact file names that belong to this language whatever their
+    /// extension, discovered recursively (e.g. CMake's `CMakeLists.txt`).
+    /// Matched case-sensitively, and ahead of the extension.
+    pub filenames: &'static [&'static str],
     /// Comment style for this language.
     pub sloc_mode: SlocMode,
 }
@@ -65,6 +74,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "c",
             extensions: &["c"],
             explicit_only: &["h"],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -74,6 +84,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "cpp",
             extensions: &["cpp", "cc", "cxx", "hpp", "hxx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -83,6 +94,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "rust",
             extensions: &["rs"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -92,6 +104,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "python",
             extensions: &["py"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Python,
         });
 
@@ -101,6 +114,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "javascript",
             extensions: &["js", "mjs", "cjs", "jsx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -110,6 +124,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "typescript",
             extensions: &["ts", "tsx"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -119,6 +134,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "ada",
             extensions: &["adb", "ada"],
             explicit_only: &["ads"],
+            filenames: &[],
             sloc_mode: SlocMode::Ada,
         });
 
@@ -128,6 +144,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "go",
             extensions: &["go"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -137,6 +154,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "java",
             extensions: &["java"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -146,6 +164,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "csharp",
             extensions: &["cs"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -155,6 +174,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "kotlin",
             extensions: &["kt", "kts"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -164,6 +184,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "swift",
             extensions: &["swift"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -173,6 +194,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "php",
             extensions: &["php"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -182,6 +204,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "fortran",
             extensions: &["f90", "f95", "f03", "f08", "F90", "F95", "F03", "F08"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Fortran,
         });
 
@@ -191,6 +214,7 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "scala",
             extensions: &["scala", "sc"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Default,
         });
 
@@ -200,18 +224,72 @@ pub fn languages() -> &'static [LanguageInfo] {
             key: "lua",
             extensions: &["lua"],
             explicit_only: &[],
+            filenames: &[],
             sloc_mode: SlocMode::Lua,
+        });
+
+        #[cfg(feature = "lang-yaml")]
+        v.push(LanguageInfo {
+            name: "YAML",
+            key: "yaml",
+            extensions: &["yaml", "yml"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Hash,
+        });
+
+        // `.jsonc` too: the grammar accepts `//` and `/* */` comments.
+        #[cfg(feature = "lang-json")]
+        v.push(LanguageInfo {
+            name: "JSON",
+            key: "json",
+            extensions: &["json", "jsonc"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Default,
+        });
+
+        // The block grammar. Its `inline` nodes hold paragraph and heading
+        // text unparsed; re-parse their ranges with the `markdown_inline`
+        // grammar (`language_for_key`) for links, emphasis and code spans.
+        #[cfg(feature = "lang-markdown")]
+        v.push(LanguageInfo {
+            name: "Markdown",
+            key: "markdown",
+            extensions: &["md", "markdown"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Markdown,
+        });
+
+        #[cfg(feature = "lang-cmake")]
+        v.push(LanguageInfo {
+            name: "CMake",
+            key: "cmake",
+            extensions: &["cmake"],
+            explicit_only: &[],
+            filenames: &["CMakeLists.txt"],
+            sloc_mode: SlocMode::Hash,
         });
 
         v
     })
 }
 
-/// Returns the tree-sitter `Language` for `path` based on its extension.
+/// Returns the tree-sitter `Language` for `path` based on its file name
+/// ([`LanguageInfo::filenames`]) or, failing that, its extension.
 ///
-/// Returns `None` if the extension is unknown or if the corresponding language
-/// feature was not compiled in.
+/// Returns `None` if the name and extension are unknown or if the
+/// corresponding language feature was not compiled in.
 pub fn language_for_file(path: &Path) -> Option<Language> {
+    #[allow(clippy::match_single_binding)]
+    match path.file_name().and_then(|n| n.to_str()) {
+        #[cfg(feature = "lang-cmake")]
+        Some("CMakeLists.txt") => return Some(tree_sitter_cmake::LANGUAGE.into()),
+
+        _ => {}
+    }
+
     match path.extension().and_then(|e| e.to_str()) {
         #[cfg(feature = "lang-ada")]
         Some("adb" | "ada" | "ads") => Some(tree_sitter_ada::LANGUAGE.into()),
@@ -263,6 +341,18 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
         #[cfg(feature = "lang-lua")]
         Some("lua") => Some(tree_sitter_lua::LANGUAGE.into()),
 
+        #[cfg(feature = "lang-yaml")]
+        Some("yaml" | "yml") => Some(tree_sitter_yaml::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-json")]
+        Some("json" | "jsonc") => Some(tree_sitter_json::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-markdown")]
+        Some("md" | "markdown") => Some(tree_sitter_md::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-cmake")]
+        Some("cmake") => Some(tree_sitter_cmake::LANGUAGE.into()),
+
         #[cfg(feature = "lang-c")]
         Some("c" | "h") => Some(tree_sitter_c::LANGUAGE.into()),
 
@@ -297,6 +387,11 @@ pub fn language_for_header_content(path: &Path, source: &[u8]) -> Option<Languag
 /// This is the complement to [`language_for_file`]: use it when you already
 /// have a key (from [`LanguageInfo::key`]) and want the grammar without
 /// constructing a fake file path.
+///
+/// Two keys name a grammar that has no [`LanguageInfo`] of its own: `"tsx"`
+/// (filed under `typescript`) and `"markdown_inline"`, the second-pass
+/// grammar for the text inside Markdown's `inline` nodes (filed under
+/// `markdown`).
 pub fn language_for_key(key: &str) -> Option<Language> {
     match key {
         #[cfg(feature = "lang-ada")]
@@ -304,6 +399,9 @@ pub fn language_for_key(key: &str) -> Option<Language> {
 
         #[cfg(feature = "lang-c")]
         "c" => Some(tree_sitter_c::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-cmake")]
+        "cmake" => Some(tree_sitter_cmake::LANGUAGE.into()),
 
         #[cfg(feature = "lang-cpp")]
         "cpp" => Some(tree_sitter_cpp::LANGUAGE.into()),
@@ -323,11 +421,20 @@ pub fn language_for_key(key: &str) -> Option<Language> {
         #[cfg(feature = "lang-javascript")]
         "javascript" => Some(tree_sitter_javascript::LANGUAGE.into()),
 
+        #[cfg(feature = "lang-json")]
+        "json" => Some(tree_sitter_json::LANGUAGE.into()),
+
         #[cfg(feature = "lang-kotlin")]
         "kotlin" => Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
 
         #[cfg(feature = "lang-lua")]
         "lua" => Some(tree_sitter_lua::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-markdown")]
+        "markdown" => Some(tree_sitter_md::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-markdown")]
+        "markdown_inline" => Some(tree_sitter_md::INLINE_LANGUAGE.into()),
 
         #[cfg(feature = "lang-php")]
         "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
@@ -350,17 +457,26 @@ pub fn language_for_key(key: &str) -> Option<Language> {
         #[cfg(feature = "lang-typescript")]
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
 
+        #[cfg(feature = "lang-yaml")]
+        "yaml" => Some(tree_sitter_yaml::LANGUAGE.into()),
+
         _ => None,
     }
 }
 
-/// Returns the [`LanguageInfo`] for `path` based on its extension.
+/// Returns the [`LanguageInfo`] for `path` based on its file name or, failing
+/// that, its extension — the same order as [`language_for_file`].
 ///
 /// Unlike [`language_for_file`], this does not require a tree-sitter grammar —
 /// it is suitable for tools (e.g. formatters) that dispatch per-language
-/// without parsing. Returns `None` if the extension is unknown or the
-/// corresponding language feature was not compiled in.
+/// without parsing. Returns `None` if the name and extension are unknown or
+/// the corresponding language feature was not compiled in.
 pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if let Some(info) = languages().iter().find(|l| l.filenames.contains(&name)) {
+            return Some(info);
+        }
+    }
     let ext = path.extension().and_then(|e| e.to_str())?;
     languages()
         .iter()
@@ -377,7 +493,9 @@ pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
 }
 
 /// Returns `true` if `ext` is in the recursive-discovery set for any
-/// compiled-in language.
+/// compiled-in language. Looks at extensions only: a discovery walk that
+/// should also find [`LanguageInfo::filenames`] (e.g. `CMakeLists.txt`) checks
+/// those, or calls [`language_info_for_file`].
 pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
     ext.to_str()
         .map(|e| languages().iter().any(|l| l.extensions.contains(&e)))
@@ -436,9 +554,10 @@ pub fn supported_languages_report() -> String {
     let mut out = String::from("Supported languages:\n");
     for lang in langs {
         let exts = lang
-            .extensions
+            .filenames
             .iter()
-            .map(|e| format!(".{e}"))
+            .map(|n| n.to_string())
+            .chain(lang.extensions.iter().map(|e| format!(".{e}")))
             .collect::<Vec<_>>()
             .join(" ");
         out.push_str(&format!("  {:<width$}  {exts}", lang.name, width = width));
@@ -500,6 +619,62 @@ mod tests {
                 ".{ext} should be free-form Fortran",
             );
         }
+    }
+
+    /// A file name match wins over the extension, and only the exact name
+    /// matches: other `.txt` files stay unknown.
+    #[cfg(feature = "lang-cmake")]
+    #[test]
+    fn cmakelists_resolves_by_file_name() {
+        let cmake: Language = tree_sitter_cmake::LANGUAGE.into();
+        for path in ["CMakeLists.txt", "src/sub/CMakeLists.txt", "util.cmake"] {
+            assert_eq!(
+                language_for_file(Path::new(path)),
+                Some(cmake.clone()),
+                "{path}"
+            );
+            assert_eq!(
+                language_info_for_file(Path::new(path)).map(|l| l.key),
+                Some("cmake"),
+                "{path}"
+            );
+        }
+        for path in ["cmakelists.txt", "CMakeLists.txt.bak", "notes.txt"] {
+            assert!(language_for_file(Path::new(path)).is_none(), "{path}");
+            assert!(language_info_for_file(Path::new(path)).is_none(), "{path}");
+        }
+        assert!(supported_languages_report().contains("CMakeLists.txt .cmake"));
+    }
+
+    /// Every registered file name must resolve to its own language through
+    /// both lookups.
+    #[test]
+    fn every_registered_filename_maps_to_its_language() {
+        for lang in languages() {
+            for name in lang.filenames {
+                let path = Path::new(name);
+                assert_eq!(
+                    language_info_for_file(path).map(|l| l.key),
+                    Some(lang.key),
+                    "{name}"
+                );
+                assert_eq!(
+                    language_for_file(path),
+                    language_for_key(lang.key),
+                    "{name} disagrees with language_for_key({:?})",
+                    lang.key
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "lang-markdown")]
+    #[test]
+    fn markdown_inline_is_a_grammar_key_only() {
+        let inline: Language = tree_sitter_md::INLINE_LANGUAGE.into();
+        assert_eq!(language_for_key("markdown_inline"), Some(inline.clone()));
+        assert_ne!(language_for_key("markdown"), Some(inline));
+        assert!(languages().iter().all(|l| l.key != "markdown_inline"));
     }
 
     #[cfg(feature = "lang-python")]

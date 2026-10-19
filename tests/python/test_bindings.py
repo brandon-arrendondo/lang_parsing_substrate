@@ -67,6 +67,22 @@ def test_languages_reflects_compiled_features():
     assert "c" in keys
 
 
+def test_wheel_includes_data_languages():
+    by_key = {info.key: info for info in lps.languages()}
+    assert {"yaml", "json", "markdown", "cmake"} <= by_key.keys()
+    assert by_key["cmake"].filenames == ["CMakeLists.txt"]
+    assert by_key["rust"].filenames == []
+
+
+def test_markdown_inline_second_pass():
+    src = b"# Title\n\nSee [the guide](guide.md).\n"
+    block = lps.parse_tree("markdown", src)
+    kinds = [block.kinds[k] for k in memoryview(block.kind).cast("I")]
+    assert "inline" in kinds and "inline_link" not in kinds
+    inline = lps.parse_tree("markdown_inline", b"See [the guide](guide.md).")
+    assert "inline_link" in inline.kinds
+
+
 def test_supported_languages_report_is_nonempty():
     assert "Rust" in lps.supported_languages_report()
 

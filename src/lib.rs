@@ -87,6 +87,8 @@ pub use tree_sitter_ada;
 pub use tree_sitter_c;
 #[cfg(feature = "lang-csharp")]
 pub use tree_sitter_c_sharp;
+#[cfg(feature = "lang-cmake")]
+pub use tree_sitter_cmake;
 #[cfg(feature = "lang-cpp")]
 pub use tree_sitter_cpp;
 #[cfg(feature = "lang-fortran")]
@@ -97,10 +99,14 @@ pub use tree_sitter_go;
 pub use tree_sitter_java;
 #[cfg(feature = "lang-javascript")]
 pub use tree_sitter_javascript;
+#[cfg(feature = "lang-json")]
+pub use tree_sitter_json;
 #[cfg(feature = "lang-kotlin")]
 pub use tree_sitter_kotlin_ng;
 #[cfg(feature = "lang-lua")]
 pub use tree_sitter_lua;
+#[cfg(feature = "lang-markdown")]
+pub use tree_sitter_md;
 #[cfg(feature = "lang-php")]
 pub use tree_sitter_php;
 #[cfg(feature = "lang-python")]
@@ -113,3 +119,5 @@ pub use tree_sitter_scala;
 pub use tree_sitter_swift;
 #[cfg(feature = "lang-typescript")]
 pub use tree_sitter_typescript;
+#[cfg(feature = "lang-yaml")]
+pub use tree_sitter_yaml;

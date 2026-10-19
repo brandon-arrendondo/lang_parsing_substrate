@@ -30,7 +30,7 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy (all features)
-        description: Lint Rust code with Clippy - deny warnings (all targets, all 16 language features)
+        description: Lint Rust code with Clippy - deny warnings (all targets, all language features)
         entry: bash -c 'cargo clippy --all-targets --all-features -- -D warnings 2>&1'
         language: system
         pass_filenames: false
