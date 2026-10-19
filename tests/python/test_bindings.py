@@ -81,6 +81,23 @@ def test_is_discoverable_file():
     assert not lps.is_discoverable_file("include/x.h")
 
 
+def test_markdown_sections_and_front_matter():
+    src = "---\ntitle: x\n---\n\nIntro.\n\n# One #\n\n```\n# no\n```\n\nTwo\n===\n"
+    secs = lps.markdown_sections(src)
+    assert [(s.level, s.heading_text, s.start_line, s.end_line) for s in secs] == [
+        (0, "", 4, 6),
+        (1, "One", 7, 12),
+        (1, "Two", 13, 14),
+    ]
+    one = secs[1]
+    assert src[one.start_byte : one.heading_end_byte] == "# One #\n"
+    assert "# no" in src[one.heading_end_byte : one.end_byte]
+    fm = lps.markdown_front_matter(src)
+    assert (fm.kind, fm.start_line, fm.end_line) == ("yaml", 1, 3)
+    assert src[fm.body_start_byte : fm.body_end_byte] == "title: x\n"
+    assert lps.markdown_front_matter("# A\n") is None
+
+
 def test_markdown_inline_second_pass():
     src = b"# Title\n\nSee [the guide](guide.md).\n"
     block = lps.parse_tree("markdown", src)

@@ -26,6 +26,8 @@ pub mod flat;
 pub mod imports;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod isr;
+#[cfg(feature = "lang-markdown")]
+pub mod markdown;
 pub mod path_ignore;
 #[cfg(feature = "pyo3")]
 mod py;
@@ -61,6 +63,8 @@ pub use flat::{flatten, FlatTree};
 pub use imports::{distinct_import_count, import_sources};
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub use isr::{interrupt_handlers, InterruptEvidence, InterruptHandler};
+#[cfg(feature = "lang-markdown")]
+pub use markdown::{front_matter, sections, ContentMap, FrontMatter, FrontMatterKind, Section};
 pub use path_ignore::PathIgnore;
 pub use query::{
     ancestors, child_nodes, find_ancestor, find_ancestor_from_root, find_descendants,

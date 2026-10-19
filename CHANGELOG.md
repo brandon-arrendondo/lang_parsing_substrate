@@ -29,6 +29,29 @@ releases are recorded only in the git tags and history.
   should pick up a file — a registered file name (`CMakeLists.txt`) or a
   recursive-discovery extension; explicit-only extensions such as `.h` are
   not discoverable.
+- `markdown` module (`lang-markdown`):
+  - `sections(root, source)` splits a document at its document-level ATX and
+    setext headings. Each `Section` has `level`, `heading_text` (as written,
+    without markers or a closing `#` run), `heading_range`, `body_range` and
+    1-indexed inclusive `start_line` / `end_line`. Sections are flat: each
+    runs to the next heading of any level. A `#` line in a code fence is never
+    a heading, and a heading inside a block quote or list item doesn't start
+    a section. A non-blank preamble before the first heading is level 0.
+  - `front_matter(root, source)` returns the opening `---` (YAML) or `+++`
+    (TOML) block, kept separate from the sections, with its body range.
+  - `ContentMap` records, per row, where content starts after container
+    prefixes (`> `, list indentation, and list and quote markers), and
+    `content_lines(node, source)` returns a node's rows without them, so a
+    node's text can be re-parsed with `markdown_inline`.
+  - Python: `markdown_sections(source)` returns `MarkdownSection` objects
+    (`level`, `heading_text`, `start_line`, `end_line`, `start_byte`,
+    `end_byte`, `heading_end_byte`), and `markdown_front_matter(source)`
+    returns a `FrontMatter` (`kind` `"yaml"` / `"toml"`, lines, bytes, body
+    bytes) or `None`.
+  - Known gap: where the grammar closes a code fence early, on a
+    delimiter-like line that CommonMark would not accept, a later heading can
+    be missed. Across about 6,000 real-world files this affected about 0.1%
+    of headings.
 - `classify` takes `sh`, `bash`, `dash` and `ksh` shebangs as a `bash`
   content hint, so an extensionless `bin/foo` starting `#!/bin/sh` is
   recognised. As with other shebangs, the extension still wins: `#!/bin/sh`

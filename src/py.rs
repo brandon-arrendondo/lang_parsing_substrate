@@ -30,6 +30,8 @@ use crate::fingerprint;
 use crate::fingerprint::Fingerprint;
 use crate::flat::{self, FlatTree};
 use crate::imports;
+#[cfg(feature = "lang-markdown")]
+use crate::markdown::{self, FrontMatter, FrontMatterKind, Section};
 use crate::path_ignore;
 use crate::regions;
 use crate::regions::IgnoredRegion;
@@ -256,6 +258,85 @@ impl From<IgnoredRegion> for PyIgnoredRegion {
             byte_range: (r.byte_range.start, r.byte_range.end),
             line_range: (r.line_range.start, r.line_range.end),
             tools: r.tools,
+        }
+    }
+}
+
+/// One document-level Markdown section: see [`crate::markdown::sections`].
+/// Lines are 1-indexed and inclusive; bytes are UTF-8 offsets, end-exclusive.
+#[cfg(feature = "lang-markdown")]
+#[pyclass(name = "MarkdownSection")]
+#[derive(Clone)]
+struct PyMarkdownSection {
+    #[pyo3(get)]
+    level: u8,
+    #[pyo3(get)]
+    heading_text: String,
+    #[pyo3(get)]
+    start_line: usize,
+    #[pyo3(get)]
+    end_line: usize,
+    #[pyo3(get)]
+    start_byte: usize,
+    #[pyo3(get)]
+    end_byte: usize,
+    /// Where the heading line(s) end and the body begins.
+    #[pyo3(get)]
+    heading_end_byte: usize,
+}
+
+#[cfg(feature = "lang-markdown")]
+impl From<Section> for PyMarkdownSection {
+    fn from(s: Section) -> Self {
+        Self {
+            level: s.level,
+            start_line: s.start_line,
+            end_line: s.end_line,
+            start_byte: s.heading_range.start,
+            end_byte: s.body_range.end,
+            heading_end_byte: s.heading_range.end,
+            heading_text: s.heading_text,
+        }
+    }
+}
+
+/// Markdown front matter: see [`crate::markdown::front_matter`]. `kind` is
+/// `"yaml"` (`---`) or `"toml"` (`+++`); the body bytes exclude the
+/// delimiter lines.
+#[cfg(feature = "lang-markdown")]
+#[pyclass(name = "FrontMatter")]
+#[derive(Clone)]
+struct PyFrontMatter {
+    #[pyo3(get)]
+    kind: &'static str,
+    #[pyo3(get)]
+    start_line: usize,
+    #[pyo3(get)]
+    end_line: usize,
+    #[pyo3(get)]
+    start_byte: usize,
+    #[pyo3(get)]
+    end_byte: usize,
+    #[pyo3(get)]
+    body_start_byte: usize,
+    #[pyo3(get)]
+    body_end_byte: usize,
+}
+
+#[cfg(feature = "lang-markdown")]
+impl From<FrontMatter> for PyFrontMatter {
+    fn from(f: FrontMatter) -> Self {
+        Self {
+            kind: match f.kind {
+                FrontMatterKind::Yaml => "yaml",
+                FrontMatterKind::Toml => "toml",
+            },
+            start_line: f.start_line,
+            end_line: f.end_line,
+            start_byte: f.byte_range.start,
+            end_byte: f.byte_range.end,
+            body_start_byte: f.body_range.start,
+            body_end_byte: f.body_range.end,
         }
     }
 }
@@ -887,6 +968,26 @@ fn suppressions(language_key: &str, source: &str) -> PyResult<Vec<PySuppression>
         .collect())
 }
 
+/// Document-level sections of Markdown `source`, split at ATX and setext
+/// headings. A non-blank preamble before the first heading is level 0.
+#[cfg(feature = "lang-markdown")]
+#[pyfunction]
+fn markdown_sections(source: &str) -> PyResult<Vec<PyMarkdownSection>> {
+    let tree = parse("markdown", source.as_bytes())?;
+    Ok(markdown::sections(tree.root_node(), source)
+        .into_iter()
+        .map(PyMarkdownSection::from)
+        .collect())
+}
+
+/// The `---` / `+++` front matter that opens Markdown `source`, or `None`.
+#[cfg(feature = "lang-markdown")]
+#[pyfunction]
+fn markdown_front_matter(source: &str) -> PyResult<Option<PyFrontMatter>> {
+    let tree = parse("markdown", source.as_bytes())?;
+    Ok(markdown::front_matter(tree.root_node(), source).map(PyFrontMatter::from))
+}
+
 /// `tools:off` / `tools:on` ignored regions in `source`.
 #[pyfunction]
 fn ignored_regions(language_key: &str, source: &str) -> PyResult<Vec<PyIgnoredRegion>> {
@@ -988,6 +1089,13 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(languages, m)?)?;
     m.add_function(wrap_pyfunction!(supported_languages_report, m)?)?;
     m.add_function(wrap_pyfunction!(is_discoverable_file, m)?)?;
+    #[cfg(feature = "lang-markdown")]
+    {
+        m.add_class::<PyMarkdownSection>()?;
+        m.add_class::<PyFrontMatter>()?;
+        m.add_function(wrap_pyfunction!(markdown_sections, m)?)?;
+        m.add_function(wrap_pyfunction!(markdown_front_matter, m)?)?;
+    }
     m.add_function(wrap_pyfunction!(call_edges, m)?)?;
     m.add_function(wrap_pyfunction!(import_sources, m)?)?;
     m.add_function(wrap_pyfunction!(function_cfg, m)?)?;

@@ -28,6 +28,7 @@ Feature gates that aren't obvious from the module name:
 - `dead_code` — `lang-c` OR `lang-cpp` OR `lang-csharp`
 - `isr` — `lang-c` OR `lang-cpp`
 - `dead_code_swift` — `lang-swift`; `dead_code_csharp` — `lang-csharp`
+- `markdown` — `lang-markdown` (its Python bindings too)
 - everything else is always compiled and returns `None` / empty for languages it doesn't model
 
 ## Key invariants

@@ -27,6 +27,7 @@ build time via Cargo feature flags.
 | `dead_code` | Preprocessor dead-code regions for C/C++ (`#if 0`, `__cplusplus`-gated branches, locally-provable macro definedness) |
 | `dead_code_swift` | Dead-code regions for Swift's `#if`/`#elseif`/`#else` conditional compilation (compile-time-constant boolean conditions only — see module docs for why the C/C++ macro-definedness sub-problem doesn't apply to Swift) |
 | `dead_code_csharp` | Dead-code regions for C#'s `#if`/`#elif`/`#else` conditional compilation — AST-based like `dead_code_swift`, but ports both C/C++ sub-problems (constant conditions and locally-provable `#define`/`#undef` symbol definedness) since C# has real nested preprocessor nodes and real `#define` |
+| `markdown` | Markdown structure (`lang-markdown`): document sections split at ATX and setext headings (`sections`), front matter (`front_matter`), and container-prefix stripping (`ContentMap`) for the `markdown_inline` second pass |
 | `path_ignore` | Compiled glob ignore-pattern sets for path filtering |
 | `isr` | C/C++ interrupt-handler detection (`interrupt_handlers`), with the evidence for each |
 
@@ -88,7 +89,8 @@ emphasis and code spans.
 A few modules exist only when the languages they model are compiled in:
 `cpp_header` needs `lang-c` and `lang-cpp`; `dead_code` needs `lang-c`,
 `lang-cpp` or `lang-csharp`; `isr` needs `lang-c` or `lang-cpp`;
-`dead_code_swift` needs `lang-swift`; `dead_code_csharp` needs `lang-csharp`.
+`dead_code_swift` needs `lang-swift`; `dead_code_csharp` needs `lang-csharp`;
+`markdown` needs `lang-markdown`.
 Every other module is always compiled and returns `None` or an empty result
 for a language it does not model.
 
@@ -207,6 +209,7 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `call_edges` / `CallEdge` / `is_function_kind` / `get_function_name` / `collect_local_names` — call-graph extraction (`calls`)
 - `build_function_cfg` / `FunctionCfg` / `BasicBlock` / `CfgEdge` — control-flow graphs (`cfg`)
 - `detect_min_c_standard` / `CStandard` — C standard lower-bound detection (`c_standard`)
+- `sections` / `Section` / `front_matter` / `FrontMatter` / `ContentMap` — Markdown structure (`markdown`; needs `lang-markdown`)
 - `function_fingerprints` / `block_fingerprints` / `structural_hash` / `duplicate_groups` / `Fingerprint` / `CorpusFingerprint` — structural hashing (`fingerprint`)
 - `ignored_regions` / `IgnoredRegion` — `tools:off`/`tools:on` markers (`regions`)
 - `suppressions` / `Suppression` — `tools:suppress` comments (`suppressions`)
@@ -266,8 +269,9 @@ separate Python bindings — so every function that analyses code takes
 `(language_key, source)`, parses internally, and returns owned data. The
 classes are `CallEdge`, `FunctionCfg`, `BasicBlock`, `Fingerprint`,
 `Suppression`, `IgnoredRegion`, `LanguageInfo`, `Capture`, `FlatTree`,
-`Node`, `FileClass` and `PathIgnore`. `classify` / `classify_file` / `is_discoverable_file` take a
-path, `PathIgnore` takes glob patterns, and `languages`,
+`Node`, `FileClass`, `PathIgnore`, `MarkdownSection` and `FrontMatter`. `classify` / `classify_file` / `is_discoverable_file` take a
+path, `PathIgnore` takes glob patterns, `markdown_sections` /
+`markdown_front_matter` take Markdown source only, and `languages`,
 `supported_languages_report` and `tags_query` take no source.
 
 A consumer that walks the tree itself (e.g. for domain-specific semantics this
