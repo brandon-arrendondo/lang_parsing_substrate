@@ -70,7 +70,7 @@ publish, not branch protection.
    The same tag makes `build.yml` create a GitHub Release carrying the
    CycloneDX SBOM (`lang-parsing-substrate-X.Y.Z.cdx.json`) and the
    third-party licence file. Both describe the wheel's build: the default
-   language set plus the `pyo3` bindings.
+   language set, `all-data-languages` and the `pyo3` bindings.
 
 3. **Publish to crates.io**, separately (the wheel and the crate are two
    different registries with two different publish mechanisms):

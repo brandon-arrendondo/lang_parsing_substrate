@@ -91,6 +91,9 @@ releases are recorded only in the git tags and history.
   `#!/bin/sh` (or `bash`, `dash`, `ksh`) a `bash` content hint. A Python
   consumer that discovers files from these sees the new files. Rust builds
   with the default features are unchanged.
+- The SBOM and third-party licence file attached to the GitHub release now
+  describe the wheel's full build, `all-data-languages` included, so they
+  list the five new grammars.
 
 ## 0.11.2 — 2026-10-08
 

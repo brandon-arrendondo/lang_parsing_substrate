@@ -92,17 +92,17 @@ jobs:
         run: cargo install cargo-about --features cli
 
       # The licence file and SBOM describe what the PyPI wheel ships: the
-      # default language set plus the `pyo3` bindings (pyproject.toml's
-      # [tool.maturin] features). The crates.io release is source only and
+      # default language set, `all-data-languages` and the `pyo3` bindings
+      # (pyproject.toml's [tool.maturin] features; keep the two in step). The crates.io release is source only and
       # bundles no dependency.
       - name: Generate Third-Party Licenses
-        run: cargo about generate --features pyo3 about.hbs -o THIRD_PARTY_LICENSES.txt
+        run: cargo about generate --features pyo3,all-data-languages about.hbs -o THIRD_PARTY_LICENSES.txt
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx
 
       - name: Generate SBOM (CycloneDX)
-        run: cargo cyclonedx --features pyo3 --format json --spec-version 1.5
+        run: cargo cyclonedx --features pyo3,all-data-languages --format json --spec-version 1.5
 
       - name: Stage SBOM release assets
         run: |
