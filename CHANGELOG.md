@@ -13,7 +13,14 @@ releases are recorded only in the git tags and history.
   grouped under a new `all-data-languages` feature that is **not** part of
   `all-languages` or the defaults, so a consumer that discovers files from
   `languages()` doesn't start picking up every `.json`, `.yml` and
-  `README.md`. The Python wheel enables both groups.
+  `README.md`. The Python wheel enables both groups. Cargo unifies features
+  across a build, though: if any crate in the same dependency graph turns on
+  `all-data-languages` (or one of its `lang-*` features), every consumer in
+  that build gets those languages in `languages()`, and so in
+  `is_source_extension` / `is_parseable_extension`. A tool that discovers
+  files from them (e.g. `knots -r`) then picks up `.yml`, `.json` and `.md`
+  files too. Consumers that are built separately, as all of them are today,
+  are unaffected.
 - `LanguageInfo::filenames`: exact file names that belong to a language
   whatever their extension. `language_for_file` and `language_info_for_file`
   check it ahead of the extension; `CMakeLists.txt` is the first entry, and
