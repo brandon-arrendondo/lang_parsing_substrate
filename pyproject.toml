@@ -7,7 +7,7 @@ name = "lang-parsing-substrate"
 # Version is read from Cargo.toml at build time (dynamic below); keep
 # `invoke bump-version` as the single place that edits it.
 dynamic = ["version"]
-description = "Shared language-parsing substrate for static-analysis tools — tree-sitter dispatch and analysis primitives across 16 programming languages plus YAML, JSON, Markdown and CMake, from Rust."
+description = "Shared language-parsing substrate for static-analysis tools — tree-sitter dispatch and analysis primitives across 16 programming languages plus YAML, JSON, Markdown, CMake and Bash, from Rust."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -36,7 +36,7 @@ bindings = "pyo3"
 # Only the `pyo3` feature-gated module is exposed to Python; other
 # `lang-*` features stay enabled via `all-languages` (default) so every
 # compiled-in language is reachable through language_for_key from Python too.
-# `all-data-languages` adds YAML, JSON, Markdown and CMake, which the Python
+# `all-data-languages` adds YAML, JSON, Markdown, CMake and Bash, which the Python
 # consumer indexes alongside code.
 features = ["pyo3", "all-data-languages"]
 module-name = "lang_parsing_substrate"

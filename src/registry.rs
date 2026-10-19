@@ -24,7 +24,7 @@ pub enum SlocMode {
     Lua,
     /// Strips `!` comment lines (free-form Fortran: `.f90`, `.f95`, …).
     Fortran,
-    /// Strips `#` comment lines — YAML and CMake. Unlike [`SlocMode::Python`],
+    /// Strips `#` comment lines — YAML, CMake and Bash. Unlike [`SlocMode::Python`],
     /// it implies no `//` or `/* */` syntax.
     Hash,
     /// Strips single-line `<!-- … -->` HTML comments (Markdown).
@@ -272,6 +272,18 @@ pub fn languages() -> &'static [LanguageInfo] {
             sloc_mode: SlocMode::Hash,
         });
 
+        // Extensionless scripts are found by `classify`'s shebang hint
+        // (`sh`, `bash`, `dash`, `ksh`), not here.
+        #[cfg(feature = "lang-bash")]
+        v.push(LanguageInfo {
+            name: "Bash",
+            key: "bash",
+            extensions: &["sh", "bash"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Hash,
+        });
+
         v
     })
 }
@@ -353,6 +365,9 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
         #[cfg(feature = "lang-cmake")]
         Some("cmake") => Some(tree_sitter_cmake::LANGUAGE.into()),
 
+        #[cfg(feature = "lang-bash")]
+        Some("sh" | "bash") => Some(tree_sitter_bash::LANGUAGE.into()),
+
         #[cfg(feature = "lang-c")]
         Some("c" | "h") => Some(tree_sitter_c::LANGUAGE.into()),
 
@@ -396,6 +411,9 @@ pub fn language_for_key(key: &str) -> Option<Language> {
     match key {
         #[cfg(feature = "lang-ada")]
         "ada" => Some(tree_sitter_ada::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-bash")]
+        "bash" => Some(tree_sitter_bash::LANGUAGE.into()),
 
         #[cfg(feature = "lang-c")]
         "c" => Some(tree_sitter_c::LANGUAGE.into()),
@@ -492,10 +510,24 @@ pub fn sloc_mode_for_file(path: &Path) -> Option<SlocMode> {
     language_info_for_file(path).map(|l| l.sloc_mode)
 }
 
+/// Returns `true` if a recursive walk should pick up `path`: its file name is
+/// in some compiled-in language's [`LanguageInfo::filenames`] (e.g.
+/// `CMakeLists.txt`), or its extension is a recursive-discovery extension
+/// ([`is_source_extension`]). Explicit-only extensions (C's `.h`) are not
+/// discoverable. Looks at the path only; extensionless scripts need
+/// [`crate::classify`]'s shebang hint.
+pub fn is_discoverable_file(path: &Path) -> bool {
+    let named = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| languages().iter().any(|l| l.filenames.contains(&n)));
+    named || path.extension().is_some_and(is_source_extension)
+}
+
 /// Returns `true` if `ext` is in the recursive-discovery set for any
 /// compiled-in language. Looks at extensions only: a discovery walk that
-/// should also find [`LanguageInfo::filenames`] (e.g. `CMakeLists.txt`) checks
-/// those, or calls [`language_info_for_file`].
+/// should also find [`LanguageInfo::filenames`] (e.g. `CMakeLists.txt`) calls
+/// [`is_discoverable_file`] instead.
 pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
     ext.to_str()
         .map(|e| languages().iter().any(|l| l.extensions.contains(&e)))
@@ -644,6 +676,31 @@ mod tests {
             assert!(language_info_for_file(Path::new(path)).is_none(), "{path}");
         }
         assert!(supported_languages_report().contains("CMakeLists.txt .cmake"));
+    }
+
+    /// `is_discoverable_file` takes registered file names and discovery
+    /// extensions, and nothing explicit-only.
+    #[test]
+    fn is_discoverable_file_covers_names_and_discovery_extensions() {
+        for lang in languages() {
+            for name in lang.filenames {
+                assert!(is_discoverable_file(Path::new(name)), "{name}");
+            }
+            for ext in lang.extensions {
+                assert!(
+                    is_discoverable_file(Path::new(&format!("d/f.{ext}"))),
+                    ".{ext}"
+                );
+            }
+            for ext in lang.explicit_only {
+                assert!(
+                    !is_discoverable_file(Path::new(&format!("f.{ext}"))),
+                    ".{ext}"
+                );
+            }
+        }
+        assert!(!is_discoverable_file(Path::new("notes.txt")));
+        assert!(!is_discoverable_file(Path::new("noext")));
     }
 
     /// Every registered file name must resolve to its own language through

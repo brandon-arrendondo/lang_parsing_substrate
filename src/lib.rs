@@ -72,8 +72,8 @@ pub use regions::{ignored_regions, IgnoredRegion};
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub use registry::language_for_header_content;
 pub use registry::{
-    is_extension_for_language, is_parseable_extension, is_source_extension, language_for_file,
-    language_for_key, language_info_for_file, languages, sloc_mode_for_file,
+    is_discoverable_file, is_extension_for_language, is_parseable_extension, is_source_extension,
+    language_for_file, language_for_key, language_info_for_file, languages, sloc_mode_for_file,
     supported_languages_report, LanguageInfo, SlocMode,
 };
 pub use suppressions::{suppressions, Suppression};
@@ -83,6 +83,8 @@ pub use tsquery::{run_query, tags_query, Capture};
 // adding their own direct tree-sitter-* dependencies.
 #[cfg(feature = "lang-ada")]
 pub use tree_sitter_ada;
+#[cfg(feature = "lang-bash")]
+pub use tree_sitter_bash;
 #[cfg(feature = "lang-c")]
 pub use tree_sitter_c;
 #[cfg(feature = "lang-csharp")]

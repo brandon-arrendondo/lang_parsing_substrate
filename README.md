@@ -4,7 +4,7 @@ A shared language-parsing substrate for static-analysis tools: tree-sitter gramm
 dispatch, language detection, and a growing set of language-agnostic analysis
 primitives (import/call graphs, control-flow graphs, structural fingerprinting,
 suppression comments) built on top of a unified `LanguageInfo` registry across
-16 programming languages, plus YAML, JSON, Markdown and CMake — compiled in at
+16 programming languages, plus YAML, JSON, Markdown, CMake and Bash — compiled in at
 build time via Cargo feature flags.
 
 ## What's in the substrate
@@ -74,7 +74,8 @@ up every `.json`, `.yml` and `README.md`. The Python wheel enables both.
 | `lang-json` | JSON (also `.jsonc`) | `tree-sitter-json` |
 | `lang-markdown` | Markdown | `tree-sitter-md` |
 | `lang-cmake` | CMake (`CMakeLists.txt`, `.cmake`) | `tree-sitter-cmake` |
-| `all-data-languages` | YAML, JSON, Markdown, CMake | — |
+| `lang-bash` | Bash (`.sh`, `.bash`) | `tree-sitter-bash` |
+| `all-data-languages` | YAML, JSON, Markdown, CMake, Bash | — |
 
 Two of these don't map one file to one grammar by extension. CMake is matched
 mostly by file name: `CMakeLists.txt` is listed in `LanguageInfo::filenames`
@@ -194,7 +195,8 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `sloc_mode_for_file(path: &Path) -> Option<SlocMode>` — comment style for SLOC counting
 - `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`registry` and `cpp_header`; needs `lang-c` and `lang-cpp`)
 - `classify` / `classify_file` / `FileClass` / `BinaryKind` / `TextEncoding` / `SourceText` / `ClassifyLimits` — heuristic pre-parse file classification (`classify`)
-- `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates
+- `is_discoverable_file(path: &Path) -> bool` — recursive-discovery gate by file name or extension
+- `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates by extension
 - `is_extension_for_language(ext: &OsStr, key: &str) -> bool` — discovery for one language (e.g. C only)
 - `supported_languages_report() -> String` — human-readable language summary
 - `LanguageInfo` / `SlocMode` — registry metadata and comment-style enum (drives SLOC calculation)
@@ -264,7 +266,7 @@ separate Python bindings — so every function that analyses code takes
 `(language_key, source)`, parses internally, and returns owned data. The
 classes are `CallEdge`, `FunctionCfg`, `BasicBlock`, `Fingerprint`,
 `Suppression`, `IgnoredRegion`, `LanguageInfo`, `Capture`, `FlatTree`,
-`Node`, `FileClass` and `PathIgnore`. `classify` / `classify_file` take a
+`Node`, `FileClass` and `PathIgnore`. `classify` / `classify_file` / `is_discoverable_file` take a
 path, `PathIgnore` takes glob patterns, and `languages`,
 `supported_languages_report` and `tags_query` take no source.
 

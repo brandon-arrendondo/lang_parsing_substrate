@@ -814,6 +814,13 @@ fn supported_languages_report() -> String {
     registry::supported_languages_report()
 }
 
+/// Whether a recursive walk should pick up `path`: a registered file name
+/// (`CMakeLists.txt`) or a recursive-discovery extension. Path only, no I/O.
+#[pyfunction]
+fn is_discoverable_file(path: &str) -> bool {
+    registry::is_discoverable_file(std::path::Path::new(path))
+}
+
 /// Call-graph edges for every named function/macro in `source`, parsed as
 /// `language_key`.
 #[pyfunction]
@@ -980,6 +987,7 @@ fn lang_parsing_substrate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("NONE", flat::NONE)?;
     m.add_function(wrap_pyfunction!(languages, m)?)?;
     m.add_function(wrap_pyfunction!(supported_languages_report, m)?)?;
+    m.add_function(wrap_pyfunction!(is_discoverable_file, m)?)?;
     m.add_function(wrap_pyfunction!(call_edges, m)?)?;
     m.add_function(wrap_pyfunction!(import_sources, m)?)?;
     m.add_function(wrap_pyfunction!(function_cfg, m)?)?;

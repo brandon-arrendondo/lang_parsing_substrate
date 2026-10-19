@@ -69,9 +69,16 @@ def test_languages_reflects_compiled_features():
 
 def test_wheel_includes_data_languages():
     by_key = {info.key: info for info in lps.languages()}
-    assert {"yaml", "json", "markdown", "cmake"} <= by_key.keys()
+    assert {"yaml", "json", "markdown", "cmake", "bash"} <= by_key.keys()
     assert by_key["cmake"].filenames == ["CMakeLists.txt"]
     assert by_key["rust"].filenames == []
+
+
+def test_is_discoverable_file():
+    assert lps.is_discoverable_file("sub/CMakeLists.txt")
+    assert lps.is_discoverable_file("run.sh")
+    assert not lps.is_discoverable_file("notes.txt")
+    assert not lps.is_discoverable_file("include/x.h")
 
 
 def test_markdown_inline_second_pass():

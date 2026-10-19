@@ -8,8 +8,12 @@ releases are recorded only in the git tags and history.
 ### Added
 
 - YAML (`lang-yaml`: `.yaml`, `.yml`), JSON (`lang-json`: `.json`, `.jsonc`),
-  Markdown (`lang-markdown`: `.md`, `.markdown`) and CMake (`lang-cmake`:
-  `CMakeLists.txt`, `.cmake`), each with its grammar re-exported. They are
+  Markdown (`lang-markdown`: `.md`, `.markdown`), CMake (`lang-cmake`:
+  `CMakeLists.txt`, `.cmake`) and Bash (`lang-bash`: `.sh`, `.bash`), each
+  with its grammar re-exported. Based on
+  [#1](https://github.com/brandon-arrendondo/lang_parsing_substrate/pull/1)
+  by @tvanfossen, which registered the same five grammars, the
+  `LanguageInfo::filenames` idea and the shell shebang hints. They are
   grouped under a new `all-data-languages` feature that is **not** part of
   `all-languages` or the defaults, so a consumer that discovers files from
   `languages()` doesn't start picking up every `.json`, `.yml` and
@@ -21,6 +25,14 @@ releases are recorded only in the git tags and history.
   files from them (e.g. `knots -r`) then picks up `.yml`, `.json` and `.md`
   files too. Consumers that are built separately, as all of them are today,
   are unaffected.
+- `is_discoverable_file(path)` (also in Python): whether a recursive walk
+  should pick up a file — a registered file name (`CMakeLists.txt`) or a
+  recursive-discovery extension; explicit-only extensions such as `.h` are
+  not discoverable.
+- `classify` takes `sh`, `bash`, `dash` and `ksh` shebangs as a `bash`
+  content hint, so an extensionless `bin/foo` starting `#!/bin/sh` is
+  recognised. As with other shebangs, the extension still wins: `#!/bin/sh`
+  in `x.c` is a `bash` hint that disagrees, and `likely_language()` is C.
 - `LanguageInfo::filenames`: exact file names that belong to a language
   whatever their extension. `language_for_file` and `language_info_for_file`
   check it ahead of the extension; `CMakeLists.txt` is the first entry, and
@@ -30,7 +42,7 @@ releases are recorded only in the git tags and history.
   `markdown` grammar leaves paragraph and heading text as `inline` nodes;
   re-parse their ranges with it for links, emphasis and code spans. Like
   `tsx`, it is a grammar key with no `LanguageInfo` of its own.
-- `SlocMode::Hash` (`#` comments: YAML, CMake) and `SlocMode::Markdown`
+- `SlocMode::Hash` (`#` comments: YAML, CMake, Bash) and `SlocMode::Markdown`
   (single-line `<!-- … -->`), which `regions` and `suppressions` recognise.
   JSON uses `SlocMode::Default`, matching `.jsonc`'s `//` and `/* */`.
 

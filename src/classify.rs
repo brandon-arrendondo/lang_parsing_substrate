@@ -527,6 +527,7 @@ fn shebang_key(line: &str) -> Option<&'static str> {
         "scala" => "scala",
         "java" => "java",
         "rust-script" => "rust",
+        "sh" | "bash" | "dash" | "ksh" => "bash",
         _ => return None,
     })
 }
@@ -907,6 +908,19 @@ mod tests {
             text("page", b"\n<?php echo 1;").by_content.unwrap().key,
             "php"
         );
+        #[cfg(all(feature = "lang-bash", feature = "lang-c"))]
+        {
+            // Same invariant for a shell shebang on a C file.
+            let t = text("x.c", b"#!/bin/sh\n");
+            assert_eq!(t.by_content.unwrap().key, "bash");
+            assert_eq!(t.extension_agrees(), Some(false));
+            assert_eq!(t.likely_language().unwrap().key, "c");
+        }
+        #[cfg(feature = "lang-bash")]
+        for line in ["#!/bin/bash\n", "#!/usr/bin/env dash\n", "#!/bin/ksh93\n"] {
+            assert_eq!(text("run", line.as_bytes()).by_content.unwrap().key, "bash");
+        }
+        #[cfg(not(feature = "lang-bash"))]
         assert!(text("x.c", b"#!/bin/sh\n").by_content.is_none());
     }
 
