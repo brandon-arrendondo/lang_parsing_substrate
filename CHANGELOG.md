@@ -3,6 +3,17 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Added
+
+- reStructuredText (`lang-rst`: `.rst`), its grammar re-exported
+  (`tree_sitter_rst`), via the upstream MIT-licensed `tree-sitter-rst` crate.
+  Grouped under `all-data-languages` (and so off by default, and not
+  recursively discovered) alongside Markdown. A new `SlocMode::Rst` strips
+  `..` explicit-markup comment lines — an approximation, since `..` also opens
+  directives and targets. Wired for moldy's `.rst` formatting support.
+
 ## 0.13.0 — 2026-10-22
 
 ### Changed

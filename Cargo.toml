@@ -46,6 +46,7 @@ tree-sitter-json                = { version = "0.24", optional = true }
 tree-sitter-md                  = { version = "0.5",  optional = true }
 tree-sitter-cmake               = { version = "0.7",  optional = true }
 tree-sitter-bash                = { version = "0.25", optional = true }
+tree-sitter-rst                 = { version = "0.2",  optional = true }
 globset = "0.4"
 infer = { version = "~0.22", default-features = false }
 
@@ -71,6 +72,7 @@ lang-json       = ["dep:tree-sitter-json"]
 lang-markdown   = ["dep:tree-sitter-md"]
 lang-cmake      = ["dep:tree-sitter-cmake"]
 lang-bash       = ["dep:tree-sitter-bash"]
+lang-rst        = ["dep:tree-sitter-rst"]
 pyo3            = ["dep:pyo3"]
 
 all-languages = [
@@ -82,5 +84,5 @@ all-languages = [
 # Data, markup, build-file and shell languages. Kept out of `all-languages` (and so
 # out of the defaults): a consumer that discovers files from `languages()`
 # would otherwise start picking up every `.json`, `.yml` and `README.md`.
-all-data-languages = ["lang-yaml", "lang-json", "lang-markdown", "lang-cmake", "lang-bash"]
+all-data-languages = ["lang-yaml", "lang-json", "lang-markdown", "lang-cmake", "lang-bash", "lang-rst"]
 default = ["all-languages"]

@@ -29,6 +29,7 @@ fn snippet_for(key: &str) -> &'static str {
         "markdown" => "# Main\n\nSome *text* and a [link](other.md).\n",
         "bash" => "#!/bin/sh\nmain() { echo \"$1\"; }\nmain \"$@\"\n",
         "cmake" => "cmake_minimum_required(VERSION 3.20)\nadd_library(main main.c)\n",
+        "rst" => "Main\n====\n\nSome *text* and a paragraph.\n",
         other => panic!("no smoke-test snippet registered for language key {other:?}"),
     }
 }

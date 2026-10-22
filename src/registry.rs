@@ -46,6 +46,13 @@ pub enum SlocMode {
     Hash,
     /// Strips single-line `<!-- … -->` HTML comments (Markdown).
     Markdown,
+    /// Strips reStructuredText explicit-markup comment lines, which open with
+    /// `..`. This is an approximation: `..` also opens directives, targets,
+    /// substitutions and footnotes, so a line-based pass treats those as
+    /// comments too. Good enough for the current consumers (RST is formatted
+    /// by moldy, not SLOC-counted, and is not recursively discovered); revisit
+    /// if a consumer needs to tell a true comment from a directive.
+    Rst,
 }
 
 /// A language the substrate can parse, with its display name, file extensions
@@ -304,6 +311,18 @@ pub fn languages() -> &'static [LanguageInfo] {
             sloc_mode: SlocMode::Hash,
         });
 
+        // Documentation markup, like Markdown: grouped under `all-data-languages`
+        // so knots doesn't discover `.rst` as source. moldy formats it.
+        #[cfg(feature = "lang-rst")]
+        v.push(LanguageInfo {
+            name: "reStructuredText",
+            key: "rst",
+            extensions: &["rst"],
+            explicit_only: &[],
+            filenames: &[],
+            sloc_mode: SlocMode::Rst,
+        });
+
         v
     })
 }
@@ -385,6 +404,9 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 
         #[cfg(feature = "lang-bash")]
         Some("sh" | "bash") => Some(tree_sitter_bash::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-rst")]
+        Some("rst") => Some(tree_sitter_rst::LANGUAGE.into()),
 
         #[cfg(feature = "lang-c")]
         Some("c" | "h") => Some(tree_sitter_c::LANGUAGE.into()),
@@ -477,6 +499,9 @@ pub fn language_for_key(key: &str) -> Option<Language> {
 
         #[cfg(feature = "lang-python")]
         "python" => Some(tree_sitter_python::LANGUAGE.into()),
+
+        #[cfg(feature = "lang-rst")]
+        "rst" => Some(tree_sitter_rst::LANGUAGE.into()),
 
         #[cfg(feature = "lang-rust")]
         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),

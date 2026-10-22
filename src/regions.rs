@@ -49,6 +49,7 @@ fn comment_syntax(
         SlocMode::Fortran => (&["!"], None),
         SlocMode::Hash => (&["#"], None),
         SlocMode::Markdown => (&[], Some(("<!--", "-->"))),
+        SlocMode::Rst => (&[".."], None),
     }
 }
 
