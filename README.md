@@ -4,8 +4,8 @@ A shared language-parsing substrate for static-analysis tools: tree-sitter gramm
 dispatch, language detection, and a growing set of language-agnostic analysis
 primitives (import/call graphs, control-flow graphs, structural fingerprinting,
 suppression comments) built on top of a unified `LanguageInfo` registry across
-16 programming languages, plus YAML, JSON, Markdown, CMake and Bash — compiled in at
-build time via Cargo feature flags.
+16 programming languages, plus YAML, JSON, Markdown, CMake, Bash and
+reStructuredText — compiled in at build time via Cargo feature flags.
 
 ## What's in the substrate
 
@@ -76,7 +76,8 @@ up every `.json`, `.yml` and `README.md`. The Python wheel enables both.
 | `lang-markdown` | Markdown | `tree-sitter-md` |
 | `lang-cmake` | CMake (`CMakeLists.txt`, `.cmake`) | `tree-sitter-cmake` |
 | `lang-bash` | Bash (`.sh`, `.bash`) | `tree-sitter-bash` |
-| `all-data-languages` | YAML, JSON, Markdown, CMake, Bash | — |
+| `lang-rst` | reStructuredText (`.rst`) | `tree-sitter-rst` |
+| `all-data-languages` | YAML, JSON, Markdown, CMake, Bash, reStructuredText | — |
 
 Two of these don't map one file to one grammar by extension. CMake is matched
 mostly by file name: `CMakeLists.txt` is listed in `LanguageInfo::filenames`

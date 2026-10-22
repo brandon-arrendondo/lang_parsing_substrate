@@ -117,6 +117,8 @@ pub use tree_sitter_md;
 pub use tree_sitter_php;
 #[cfg(feature = "lang-python")]
 pub use tree_sitter_python;
+#[cfg(feature = "lang-rst")]
+pub use tree_sitter_rst;
 #[cfg(feature = "lang-rust")]
 pub use tree_sitter_rust;
 #[cfg(feature = "lang-scala")]
