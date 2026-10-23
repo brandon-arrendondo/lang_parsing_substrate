@@ -10,19 +10,16 @@
 //! # Extension case
 //!
 //! Every extension lookup here folds the path's extension to ASCII lowercase
-//! first ([`folded_extension`]), so `A.C`, `A.Cpp`, `MAIN.PY` and `lib.RS`
-//! resolve like their lowercase forms. Source trees built on Windows, which
-//! has case-insensitive file names, commonly arrive with uppercase
-//! extensions, and an exact match silently skipped those files.
+//! first (`folded_extension`), so upper- and mixed-case extensions such as
+//! `A.C`, `A.Cpp`, `MAIN.PY` and `lib.RS` resolve like their lowercase forms.
+//! Source trees built on Windows, which has case-insensitive file names,
+//! commonly arrive with uppercase extensions.
 //!
-//! Folding erases the one distinction a case-sensitive convention draws
-//! within the registered extensions: GCC treats `foo.C` as C++, where `foo.c`
-//! is C. Here `.C` is C and `.H` is a C header, because the uppercase files
-//! seen in practice are Windows-built C trees, and a C++ project that names
-//! its sources `.C` can still say so by parsing with
-//! `language_for_key("cpp")`. Fortran's `.F90` (preprocessed by convention)
-//! and `.f90` were already the same grammar, so folding changes nothing
-//! there. Language keys and [`LanguageInfo::filenames`] are not folded: keys
+//! `.C` is C and `.H` is a C header, because the uppercase files seen in
+//! practice are Windows-built supplier trees. GCC's convention that `foo.C`
+//! is C++ is deliberately not followed; a C++ project that names its sources
+//! `.C` can parse them with `language_for_key("cpp")`. Fortran's `.F90`
+//! (preprocessed by convention) and `.f90` share one grammar. Language keys and [`LanguageInfo::filenames`] are not folded: keys
 //! are lowercase and matched exactly, and `CMakeLists.txt` is matched as
 //! written.
 

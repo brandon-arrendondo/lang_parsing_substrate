@@ -12,17 +12,18 @@ releases are recorded only in the git tags and history.
   `sloc_mode_for_file` and `classify`'s extension hint),
   `is_discoverable_file`, `is_source_extension`, `is_parseable_extension` and
   `is_extension_for_language` fold the extension to ASCII lowercase before
-  looking it up. Source trees built on Windows often arrive as `X.C` / `X.H`,
-  and an exact match silently skipped them: a recursive walk found no files,
-  and a file passed by name was unsupported. Folding applies to every
-  language, so `.CPP` and `.HPP` are C++, `.PY` is Python and `.RS` is Rust.
-- `.C` is C and `.H` is a C header, not C++. GCC treats `foo.C` as C++;
-  that is the one extension in the registry whose case carried meaning, and
-  folding drops it, because uppercase C files in practice come from
-  Windows-built C trees. A C++ project that names its sources `.C` can parse
-  them with `language_for_key("cpp")`. `language_for_header_content` still
-  sniffs a `.H` file for C++ the way it does `.h`. Fortran's uppercase `.F90`
-  and lowercase `.f90` already shared a grammar.
+  looking it up, so upper- and mixed-case extensions now resolve. Before,
+  they matched nothing: source trees built on Windows often arrive as
+  `X.C` / `X.H`, and a recursive walk found no files while a file passed by
+  name was unsupported. Folding applies to every language, so `.CPP` and
+  `.HPP` are C++, `.PY` is Python and `.RS` is Rust.
+- `.C` is C and `.H` is a C header, for those Windows supplier trees. GCC's
+  convention that `foo.C` is C++ is deliberately not followed; a C++ project
+  that names its sources `.C` can parse them with `language_for_key("cpp")`.
+  `language_for_header_content` still sniffs a `.H` file for C++ the way it
+  does `.h`.
+- `PathIgnore` globs are still case-sensitive, so `*.c` does not exclude a
+  newly discovered `X.C`. Use a directory pattern, or list both cases.
 - Language keys stay case-sensitive (`language_for_key("C")` is `None`), and
   `LanguageInfo::filenames` such as `CMakeLists.txt` are still matched as
   written.
