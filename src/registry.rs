@@ -6,7 +6,27 @@
 //! (`is_source_extension`, `is_parseable_extension`) that drive recursive
 //! file discovery in knots and moldy, and `is_extension_for_language`, which
 //! aurora-lint uses to discover C files only.
+//!
+//! # Extension case
+//!
+//! Every extension lookup here folds the path's extension to ASCII lowercase
+//! first ([`folded_extension`]), so `A.C`, `A.Cpp`, `MAIN.PY` and `lib.RS`
+//! resolve like their lowercase forms. Source trees built on Windows, which
+//! has case-insensitive file names, commonly arrive with uppercase
+//! extensions, and an exact match silently skipped those files.
+//!
+//! Folding erases the one distinction a case-sensitive convention draws
+//! within the registered extensions: GCC treats `foo.C` as C++, where `foo.c`
+//! is C. Here `.C` is C and `.H` is a C header, because the uppercase files
+//! seen in practice are Windows-built C trees, and a C++ project that names
+//! its sources `.C` can still say so by parsing with
+//! `language_for_key("cpp")`. Fortran's `.F90` (preprocessed by convention)
+//! and `.f90` were already the same grammar, so folding changes nothing
+//! there. Language keys and [`LanguageInfo::filenames`] are not folded: keys
+//! are lowercase and matched exactly, and `CMakeLists.txt` is matched as
+//! written.
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::OnceLock;
 use tree_sitter::Language;
@@ -41,7 +61,10 @@ pub struct LanguageInfo {
     /// section names (e.g. `[c.thresholds]` in knots.toml).
     /// Always lowercase ASCII; e.g. `"cpp"`, `"csharp"`, `"javascript"`.
     pub key: &'static str,
-    /// Extensions used during recursive discovery (no leading dot).
+    /// Extensions used during recursive discovery (no leading dot), in
+    /// lowercase. Lookups fold the path's extension to lowercase before
+    /// comparing (see the module docs); Fortran also lists its uppercase
+    /// forms for consumers that compare against this list directly.
     pub extensions: &'static [&'static str],
     /// Extensions parsed only when a file is passed explicitly — never
     /// discovered recursively (e.g. C's `.h` headers).
@@ -302,7 +325,7 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
         _ => {}
     }
 
-    match path.extension().and_then(|e| e.to_str()) {
+    match path_extension(path).as_deref() {
         #[cfg(feature = "lang-ada")]
         Some("adb" | "ada" | "ads") => Some(tree_sitter_ada::LANGUAGE.into()),
 
@@ -343,9 +366,7 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
         Some("php") => Some(tree_sitter_php::LANGUAGE_PHP.into()),
 
         #[cfg(feature = "lang-fortran")]
-        Some("f90" | "f95" | "f03" | "f08" | "F90" | "F95" | "F03" | "F08") => {
-            Some(tree_sitter_fortran::LANGUAGE.into())
-        }
+        Some("f90" | "f95" | "f03" | "f08") => Some(tree_sitter_fortran::LANGUAGE.into()),
 
         #[cfg(feature = "lang-scala")]
         Some("scala" | "sc") => Some(tree_sitter_scala::LANGUAGE.into()),
@@ -385,7 +406,7 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 /// unambiguous and why a "no" doesn't mean "confirmed C".
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub fn language_for_header_content(path: &Path, source: &[u8]) -> Option<Language> {
-    match path.extension().and_then(|e| e.to_str()) {
+    match path_extension(path).as_deref() {
         Some("h") if crate::cpp_header::looks_like_cpp(source) => {
             Some(tree_sitter_cpp::LANGUAGE.into())
         }
@@ -495,10 +516,25 @@ pub fn language_info_for_file(path: &Path) -> Option<&'static LanguageInfo> {
             return Some(info);
         }
     }
-    let ext = path.extension().and_then(|e| e.to_str())?;
-    languages()
-        .iter()
-        .find(|l| l.extensions.contains(&ext) || l.explicit_only.contains(&ext))
+    let ext = path_extension(path)?;
+    languages().iter().find(|l| has_extension(l, &ext))
+}
+
+/// `ext` folded to ASCII lowercase, the form every extension lookup compares
+/// (see the module docs). `None` if `ext` is not UTF-8.
+fn folded_extension(ext: &OsStr) -> Option<String> {
+    ext.to_str().map(str::to_ascii_lowercase)
+}
+
+/// The extension of `path`, folded by [`folded_extension`].
+fn path_extension(path: &Path) -> Option<String> {
+    path.extension().and_then(folded_extension)
+}
+
+/// Whether the folded extension `ext` is one of `lang`'s recursive-discovery
+/// or explicit-only extensions.
+fn has_extension(lang: &LanguageInfo, ext: &str) -> bool {
+    lang.extensions.contains(&ext) || lang.explicit_only.contains(&ext)
 }
 
 /// Returns the [`SlocMode`] for `path`.
@@ -528,10 +564,12 @@ pub fn is_discoverable_file(path: &Path) -> bool {
 /// compiled-in language. Looks at extensions only: a discovery walk that
 /// should also find [`LanguageInfo::filenames`] (e.g. `CMakeLists.txt`) calls
 /// [`is_discoverable_file`] instead.
-pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
-    ext.to_str()
-        .map(|e| languages().iter().any(|l| l.extensions.contains(&e)))
-        .unwrap_or(false)
+pub fn is_source_extension(ext: &OsStr) -> bool {
+    folded_extension(ext).is_some_and(|e| {
+        languages()
+            .iter()
+            .any(|l| l.extensions.contains(&e.as_str()))
+    })
 }
 
 /// Returns `true` if the substrate can parse files with `ext` — includes both
@@ -544,14 +582,8 @@ pub fn is_source_extension(ext: &std::ffi::OsStr) -> bool {
 /// [`is_extension_for_language`] instead — this function's result changes
 /// whenever the enabled feature set changes, which is rarely what a
 /// single-language consumer wants.
-pub fn is_parseable_extension(ext: &std::ffi::OsStr) -> bool {
-    ext.to_str()
-        .map(|e| {
-            languages()
-                .iter()
-                .any(|l| l.extensions.contains(&e) || l.explicit_only.contains(&e))
-        })
-        .unwrap_or(false)
+pub fn is_parseable_extension(ext: &OsStr) -> bool {
+    folded_extension(ext).is_some_and(|e| languages().iter().any(|l| has_extension(l, &e)))
 }
 
 /// Returns `true` if `ext` is a recursive-discovery or explicit-only
@@ -567,15 +599,13 @@ pub fn is_parseable_extension(ext: &std::ffi::OsStr) -> bool {
 /// key(s), so enabling another language's feature can never change what
 /// counts as "my source files". Returns `false` if `key` is unknown or its
 /// feature was not compiled in.
-pub fn is_extension_for_language(ext: &std::ffi::OsStr, key: &str) -> bool {
-    ext.to_str()
-        .map(|e| {
-            languages()
-                .iter()
-                .find(|l| l.key == key)
-                .is_some_and(|l| l.extensions.contains(&e) || l.explicit_only.contains(&e))
-        })
-        .unwrap_or(false)
+pub fn is_extension_for_language(ext: &OsStr, key: &str) -> bool {
+    folded_extension(ext).is_some_and(|e| {
+        languages()
+            .iter()
+            .find(|l| l.key == key)
+            .is_some_and(|l| has_extension(l, &e))
+    })
 }
 
 /// Renders a human-readable summary of compiled-in languages, suitable for
@@ -917,5 +947,92 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Extensions match whatever their case: an upper- or mixed-case form
+    /// resolves exactly as the lowercase one does, in every lookup.
+    #[test]
+    fn extension_lookups_fold_case() {
+        for lang in languages() {
+            for ext in lang.extensions.iter().chain(lang.explicit_only) {
+                let lower = ext.to_ascii_lowercase();
+                let mut mixed: Vec<char> = lower.chars().collect();
+                mixed[0] = mixed[0].to_ascii_uppercase();
+                let mixed: String = mixed.into_iter().collect();
+                for variant in [ext.to_ascii_uppercase(), mixed] {
+                    let path = format!("f.{variant}");
+                    let os_ext = std::ffi::OsStr::new(&variant);
+                    assert_eq!(
+                        language_for_file(Path::new(&path)),
+                        language_for_file(Path::new(&format!("f.{lower}"))),
+                        "{path} ({})",
+                        lang.name
+                    );
+                    assert_eq!(
+                        language_info_for_file(Path::new(&path)).map(|l| l.key),
+                        Some(lang.key),
+                        "{path}"
+                    );
+                    assert!(is_extension_for_language(os_ext, lang.key), "{path}");
+                    assert!(is_parseable_extension(os_ext), "{path}");
+                    let discoverable = lang.extensions.contains(ext);
+                    assert_eq!(is_source_extension(os_ext), discoverable, "{path}");
+                    assert_eq!(
+                        is_discoverable_file(Path::new(&path)),
+                        discoverable,
+                        "{path}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `.C` and `.H` are C, not C++: uppercase extensions come from
+    /// Windows-built C trees, so GCC's `foo.C`-is-C++ convention is not
+    /// followed. `.Cpp` and `.HPP` stay C++.
+    #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+    #[test]
+    fn uppercase_c_is_c_and_mixed_case_cpp_is_cpp() {
+        let c: Language = tree_sitter_c::LANGUAGE.into();
+        let cpp: Language = tree_sitter_cpp::LANGUAGE.into();
+        let os = std::ffi::OsStr::new;
+        for name in ["A.C", "B.H", "src/x.C", "x.h"] {
+            assert_eq!(
+                language_for_file(Path::new(name)),
+                Some(c.clone()),
+                "{name}"
+            );
+            assert_eq!(
+                language_info_for_file(Path::new(name)).map(|l| l.key),
+                Some("c"),
+                "{name}"
+            );
+        }
+        for name in ["a.Cpp", "a.CPP", "b.HPP", "c.Cc", "d.CXX"] {
+            assert_eq!(
+                language_for_file(Path::new(name)),
+                Some(cpp.clone()),
+                "{name}"
+            );
+        }
+        assert!(is_extension_for_language(os("C"), "c"));
+        assert!(is_extension_for_language(os("H"), "c"));
+        assert!(!is_extension_for_language(os("C"), "cpp"));
+        assert!(is_extension_for_language(os("Cpp"), "cpp"));
+        assert!(!is_extension_for_language(os("Cpp"), "c"));
+        assert!(is_source_extension(os("C")));
+        assert!(!is_source_extension(os("H")), ".H stays explicit-only");
+        assert!(is_parseable_extension(os("H")));
+        assert!(is_discoverable_file(Path::new("up/A.C")));
+        assert!(!is_discoverable_file(Path::new("up/B.H")));
+        // Content sniffing still applies to an uppercase header.
+        assert_eq!(
+            language_for_header_content(Path::new("B.H"), b"#define X 1\n"),
+            Some(c)
+        );
+        assert_eq!(
+            language_for_header_content(Path::new("B.H"), b"namespace n { }\n"),
+            Some(cpp)
+        );
     }
 }

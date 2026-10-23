@@ -219,6 +219,12 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `interrupt_handlers` / `InterruptHandler` / `InterruptEvidence` — interrupt-handler detection (`isr`; needs `lang-c` or `lang-cpp`)
 - `PathIgnore` — compiled glob ignore sets (`path_ignore`)
 
+Extensions match case-insensitively in every lookup: `A.C` is C, `B.H` a C
+header and `X.CPP` C++. `.C` is C rather than GCC's C++, because uppercase
+extensions in practice come from Windows-built C trees; a C++ project using
+`.C` can parse through `language_for_key("cpp")`. The registry module docs
+give the reasoning.
+
 ## Building
 
 ```bash

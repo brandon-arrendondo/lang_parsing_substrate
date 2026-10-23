@@ -3,6 +3,30 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Changed
+
+- File extensions match case-insensitively. `language_for_file`,
+  `language_for_header_content`, `language_info_for_file` (and so
+  `sloc_mode_for_file` and `classify`'s extension hint),
+  `is_discoverable_file`, `is_source_extension`, `is_parseable_extension` and
+  `is_extension_for_language` fold the extension to ASCII lowercase before
+  looking it up. Source trees built on Windows often arrive as `X.C` / `X.H`,
+  and an exact match silently skipped them: a recursive walk found no files,
+  and a file passed by name was unsupported. Folding applies to every
+  language, so `.CPP` and `.HPP` are C++, `.PY` is Python and `.RS` is Rust.
+- `.C` is C and `.H` is a C header, not C++. GCC treats `foo.C` as C++;
+  that is the one extension in the registry whose case carried meaning, and
+  folding drops it, because uppercase C files in practice come from
+  Windows-built C trees. A C++ project that names its sources `.C` can parse
+  them with `language_for_key("cpp")`. `language_for_header_content` still
+  sniffs a `.H` file for C++ the way it does `.h`. Fortran's uppercase `.F90`
+  and lowercase `.f90` already shared a grammar.
+- Language keys stay case-sensitive (`language_for_key("C")` is `None`), and
+  `LanguageInfo::filenames` such as `CMakeLists.txt` are still matched as
+  written.
+
 ## 0.12.0 — 2026-10-19
 
 ### Added
