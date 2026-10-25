@@ -22,7 +22,7 @@ repos:
       - id: cargo-fmt
         name: cargo fmt (auto-fix)
         description: Format Rust code with rustfmt
-        entry: bash -c 'cargo fmt --all 2>&1 && echo "Formatting complete"'
+        entry: cargo fmt --all
         language: system
         pass_filenames: false
         types: [rust]
@@ -31,7 +31,7 @@ repos:
       - id: cargo-clippy
         name: cargo clippy (all features)
         description: Lint Rust code with Clippy - deny warnings (all targets, all language features)
-        entry: bash -c 'cargo clippy --all-targets --all-features -- -D warnings 2>&1'
+        entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
         types: [rust]
@@ -40,7 +40,7 @@ repos:
       - id: cargo-test
         name: cargo test (all features + lang-c,lang-cpp subset)
         description: Run the test suite under the full feature set and the minimal C/C++ subset, matching CI
-        entry: bash -c 'cargo test --all-features 2>&1 && cargo test --no-default-features --features lang-c,lang-cpp 2>&1'
+        entry: sh -c 'cargo test --all-features && cargo test --no-default-features --features lang-c,lang-cpp'
         language: system
         pass_filenames: false
         types: [rust]
