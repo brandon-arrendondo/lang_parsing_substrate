@@ -58,6 +58,12 @@ indent = { style = "spaces", width = 4 }
 line_length = 88    # project-wide override of PEP8's 79
 ```
 
+`[ignore].paths` entries are globs compiled by the substrate's `PathIgnore`. `PathIgnore::new`
+matches them case-sensitively. File discovery matches extensions in any case, so a tool can
+compile with `PathIgnore::with_extension_case_folded` (Python:
+`PathIgnore(patterns, fold_extension_case=True)`) to make `*.c` also ignore `A.C`. Only the
+extension folds; `Vendor/**` still does not match `vendor/x.c`.
+
 ---
 
 ## `knots.toml` — knots-specific config

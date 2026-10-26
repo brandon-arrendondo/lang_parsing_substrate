@@ -217,7 +217,7 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `swift_dead_code_regions` / `SwiftDeadCodeRegion` — Swift `#if`/`#elseif`/`#else` dead-code regions (`dead_code_swift`; needs `lang-swift`)
 - `csharp_dead_code_regions` / `CSharpDeadCodeRegion` — C# `#if`/`#elif`/`#else` dead-code regions (`dead_code_csharp`; needs `lang-csharp`)
 - `interrupt_handlers` / `InterruptHandler` / `InterruptEvidence` — interrupt-handler detection (`isr`; needs `lang-c` or `lang-cpp`)
-- `PathIgnore` — compiled glob ignore sets (`path_ignore`)
+- `PathIgnore` — compiled glob ignore sets (`path_ignore`); `PathIgnore::with_extension_case_folded` also matches a pattern's extension in any case
 
 Extensions match case-insensitively in every lookup: `A.C` is C, `B.H` a C
 header and `X.CPP` C++. `.C` is C rather than GCC's C++, because uppercase
@@ -270,6 +270,7 @@ body = md.encode()[secs[0].heading_end_byte : secs[0].end_byte]  # slice the enc
 tree = lps.parse_tree("rust", src.encode())  # FlatTree: every node as columns
 cls = lps.classify_file("src/main.rs", max_size=4 << 20)  # FileClass: kind, encoding, ...
 skip = lps.PathIgnore(["vendor/**"]).is_ignored("vendor/x.c")  # True
+lps.PathIgnore(["*.c"], fold_extension_case=True).is_ignored("A.C")  # True
 ```
 
 Python can't hand this crate a `tree_sitter::Node`/`Tree` directly — this

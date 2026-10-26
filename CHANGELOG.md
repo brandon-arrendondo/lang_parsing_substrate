@@ -5,6 +5,18 @@ releases are recorded only in the git tags and history.
 
 ## Unreleased
 
+### Added
+
+- `PathIgnore::with_extension_case_folded`, an opt-in constructor whose
+  patterns match a file extension in any ASCII case, as discovery has since
+  0.13.0: `*.c` and `src/*.c` also ignore `A.C` and `src/B.C`, and `**/*.H`
+  ignores `x/a.h`. Directory names and the rest of the file name stay
+  case-sensitive, so `Vendor/**` does not match `vendor/x.c`. An extension
+  written with glob syntax (`*.{c,h}`, `*.[ch]`) is compiled as written, and
+  an invalid pattern is still an error. In Python, pass
+  `PathIgnore(patterns, fold_extension_case=True)`. `PathIgnore::new` and the
+  default Python constructor are unchanged.
+
 ### Fixed
 
 - `looks_like_cpp`, and so `language_for_header_content`, no longer reads

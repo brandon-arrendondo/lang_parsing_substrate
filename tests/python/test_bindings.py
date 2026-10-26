@@ -323,6 +323,23 @@ def test_path_ignore_matches_globs():
     assert not lps.PathIgnore([]).is_ignored("anything")
 
 
+def test_path_ignore_folds_extension_case_on_request():
+    assert not lps.PathIgnore(["*.c"]).is_ignored("A.C")
+    ignore = lps.PathIgnore(["*.c", "Vendor/**"], fold_extension_case=True)
+    assert ignore.is_ignored("A.C")
+    assert ignore.is_ignored("src/b.c")
+    assert ignore.is_ignored("Vendor/x.h")
+    assert not ignore.is_ignored("vendor/x.h")
+
+
+def test_path_ignore_folding_still_rejects_an_invalid_glob():
+    try:
+        lps.PathIgnore(["[/1.a"], fold_extension_case=True)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
 def test_path_ignore_invalid_glob_raises():
     try:
         lps.PathIgnore(["src/[unclosed"])

@@ -865,10 +865,18 @@ struct PyPathIgnore {
 #[pymethods]
 impl PyPathIgnore {
     /// Compile `patterns`, e.g. `["vendor/**", "third_party/**"]`. Raises
-    /// `ValueError` naming the first invalid glob.
+    /// `ValueError` naming the first invalid glob. With
+    /// `fold_extension_case=True`, a pattern's file extension matches in any
+    /// case (`*.c` ignores `A.C`) while directories stay case-sensitive.
     #[new]
-    fn new(patterns: Vec<String>) -> PyResult<Self> {
-        path_ignore::PathIgnore::new(&patterns)
+    #[pyo3(signature = (patterns, fold_extension_case=false))]
+    fn new(patterns: Vec<String>, fold_extension_case: bool) -> PyResult<Self> {
+        let compiled = if fold_extension_case {
+            path_ignore::PathIgnore::with_extension_case_folded(&patterns)
+        } else {
+            path_ignore::PathIgnore::new(&patterns)
+        };
+        compiled
             .map(|inner| Self { inner })
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
