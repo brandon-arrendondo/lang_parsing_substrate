@@ -3,6 +3,28 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Fixed
+
+- `looks_like_cpp`, and so `language_for_header_content`, no longer reads
+  three valid C shapes as C++: a pointer or variable named `new` (as in the
+  Linux `list.h` helpers), a parameter or variable named `delete`, and the
+  expression statement `a & b;`. The C++ grammar's error recovery turned them
+  into `new`/`delete` expressions and reference declarators. A `new` or
+  `delete` expression now counts only when it parses cleanly and the file
+  never uses `new` or `delete` as a name; a macro named `new`
+  (`#define new DEBUG_NEW`) is not such a name, and a deleted function
+  (`void f() = delete;`) always counts. A reference declarator counts only
+  when it parses cleanly and is not a bare `a & b;`, so an uninitialized
+  reference without `extern` (`T& r;`), which C++ rejects, now reads as C.
+  The fix also holds inside an `#ifdef __cplusplus extern "C" {` guard, and
+  keeps K&R-style C after such a guard on the C path. Real C++ (`new T`,
+  `delete[] p`, `T& r = x;`, `void f(T& x);`) still detects. One C++ shape is
+  now missed: a reference beside an unexpanded macro
+  (`API_EXPORT int& counter();`) leaves a parse error next to it, so a header
+  whose only C++ is that shape reads as C.
+
 ## 0.13.0 — 2026-10-22
 
 ### Changed
