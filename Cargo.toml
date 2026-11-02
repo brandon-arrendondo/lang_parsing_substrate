@@ -46,7 +46,7 @@ tree-sitter-json                = { version = "0.24", optional = true }
 tree-sitter-md                  = { version = "0.5",  optional = true }
 tree-sitter-cmake               = { version = "0.7",  optional = true }
 tree-sitter-bash                = { version = "0.25", optional = true }
-tree-sitter-rst                 = { version = "0.2",  optional = true }
+tree-sitter-rst                 = { package = "tree-sitter-rst-next", version = "0.2", optional = true }
 globset = "0.4"
 infer = { version = "~0.22", default-features = false }
 
@@ -86,3 +86,8 @@ all-languages = [
 # would otherwise start picking up every `.json`, `.yml` and `README.md`.
 all-data-languages = ["lang-yaml", "lang-json", "lang-markdown", "lang-cmake", "lang-bash", "lang-rst"]
 default = ["all-languages"]
+
+# Branch-only: tree-sitter-rst-next is not on crates.io until its first
+# release. Remove this before the branch merges.
+[patch.crates-io]
+tree-sitter-rst-next = { path = "../tree-sitter-rst-moldy" }

@@ -8,7 +8,9 @@ releases are recorded only in the git tags and history.
 ### Added
 
 - reStructuredText (`lang-rst`: `.rst`), its grammar re-exported
-  (`tree_sitter_rst`), via the upstream MIT-licensed `tree-sitter-rst` crate.
+  (`tree_sitter_rst`), via the MIT-licensed `tree-sitter-rst-next` crate, a
+  maintained successor to `tree-sitter-rst` that reads documents as
+  docutils does.
   Grouped under `all-data-languages` (and so off by default, and not
   recursively discovered) alongside Markdown. A new `SlocMode::Rst` strips
   `..` explicit-markup comment lines — an approximation, since `..` also opens

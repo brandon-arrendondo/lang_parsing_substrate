@@ -76,7 +76,7 @@ up every `.json`, `.yml` and `README.md`. The Python wheel enables both.
 | `lang-markdown` | Markdown | `tree-sitter-md` |
 | `lang-cmake` | CMake (`CMakeLists.txt`, `.cmake`) | `tree-sitter-cmake` |
 | `lang-bash` | Bash (`.sh`, `.bash`) | `tree-sitter-bash` |
-| `lang-rst` | reStructuredText (`.rst`) | `tree-sitter-rst` |
+| `lang-rst` | reStructuredText (`.rst`) | `tree-sitter-rst-next` |
 | `all-data-languages` | YAML, JSON, Markdown, CMake, Bash, reStructuredText | — |
 
 Two of these don't map one file to one grammar by extension. CMake is matched
