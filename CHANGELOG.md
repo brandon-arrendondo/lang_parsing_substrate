@@ -5,6 +5,8 @@ releases are recorded only in the git tags and history.
 
 ## Unreleased
 
+## 0.16.0 — 2026-11-03
+
 ### Fixed
 
 - `dead_code_ranges` and `dead_code_ranges_with_assumptions` no longer mark
