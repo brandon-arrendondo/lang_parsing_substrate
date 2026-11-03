@@ -250,18 +250,23 @@ fn dead_code_ranges_impl(
     // This scanner doesn't know whether the file is C or C++, and a raw
     // string can be misread (`#define R "x"` then `R"(";` in C, or
     // ill-formed source). One still open at end of file has hidden
-    // everything after it, so read the file again without raw strings.
-    scan_lines(source, assumed, true)
-        .unwrap_or_else(|| scan_lines(source, assumed, false).unwrap_or_default())
+    // everything after it, so read the file again with raw strings off from
+    // the line it opened on. Every line before that reads exactly as in the
+    // first pass, so earlier, closed raw strings still protect their text.
+    match scan_lines(source, assumed, usize::MAX) {
+        Ok(regions) => regions,
+        Err(open_line) => scan_lines(source, assumed, open_line).unwrap_or_default(),
+    }
 }
 
-/// One pass over `source`. `None` when `raw_strings` is on and a raw string
-/// is still open at end of file.
+/// One pass over `source`, reading raw strings only on lines before index
+/// `raw_strings_until`. `Err` gives the index of the line where a raw string
+/// still open at end of file began.
 fn scan_lines(
     source: &str,
     assumed: Option<&PlatformAssumptions>,
-    raw_strings: bool,
-) -> Option<Vec<DeadCodeRegion>> {
+    raw_strings_until: usize,
+) -> Result<Vec<DeadCodeRegion>, usize> {
     let mut scan = Scan {
         defined: assumed
             .map(|a| a.iter().map(|(k, &v)| (k.clone(), Def::from(v))).collect())
@@ -270,19 +275,24 @@ fn scan_lines(
     };
     let mut lex = Lex::Code;
     let mut total_lines = 0;
+    let mut raw_opened_at = 0;
 
     for (idx, raw) in source.lines().enumerate() {
         total_lines = idx + 1;
-        let line = strip_comments(raw, &mut lex, raw_strings);
+        let mut opened_raw = false;
+        let line = strip_comments(raw, &mut lex, idx < raw_strings_until, &mut opened_raw);
+        if opened_raw {
+            raw_opened_at = idx;
+        }
         if let Some((directive, rest)) = parse_directive(&line) {
             scan.directive(idx + 1, directive, rest);
         }
     }
 
     if matches!(lex, Lex::Raw(_)) {
-        return None;
+        return Err(raw_opened_at);
     }
-    Some(scan.finish(total_lines))
+    Ok(scan.finish(total_lines))
 }
 
 /// What this file proves about one macro name at a point in the scan.
@@ -746,8 +756,14 @@ enum Lex {
 /// comes back blank, and a `#define` or `#if` written inside one is never
 /// read as a directive. Literals that open on this line are kept as written,
 /// and the `/*` in `"/*"` opens nothing. With `raw_strings` off, `R"` opens
-/// an ordinary string.
-fn strip_comments<'a>(line: &'a str, state: &mut Lex, raw_strings: bool) -> Cow<'a, str> {
+/// an ordinary string. `opened_raw` is set when a raw string opens on this
+/// line.
+fn strip_comments<'a>(
+    line: &'a str,
+    state: &mut Lex,
+    raw_strings: bool,
+    opened_raw: &mut bool,
+) -> Cow<'a, str> {
     if *state == Lex::Code && !line.contains(['/', '"', '\'']) {
         return Cow::Borrowed(line);
     }
@@ -810,6 +826,7 @@ fn strip_comments<'a>(line: &'a str, state: &mut Lex, raw_strings: bool) -> Cow<
                     *state = match raw {
                         Some((delim, open)) => {
                             i = open;
+                            *opened_raw = true;
                             Lex::Raw(delim.to_string())
                         }
                         None => Lex::Quote(c),
@@ -1400,6 +1417,34 @@ mod tests {
             "#endif\n",                  // 5
         );
         assert_eq!(ranges(outside), vec![(4, 4, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn a_closed_raw_string_before_an_unclosed_one_still_hides_its_text() {
+        let src = concat!(
+            "const char *ok = R\"(\n",      // 1
+            "#if 0\n",                      // 2
+            ")\";\n",                       // 3
+            "int LIVE;\n",                  // 4
+            "#ifdef A\n",                   // 5
+            "int LIVE;\n",                  // 6
+            "#endif\n",                     // 7
+            "int LIVE;\n",                  // 8
+            "const char *bad = R\"(oops\n", // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn an_unclosed_raw_string_after_a_closed_one_leaves_later_directives() {
+        let src = concat!(
+            "const char *ok = R\"(a \" /* b)\";\n", // 1
+            "const char *bad = R\"(oops\n",         // 2
+            "#if 0\n",                              // 3
+            "dead();\n",                            // 4
+            "#endif\n",                             // 5
+        );
+        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::IfZero)]);
     }
 
     #[test]
