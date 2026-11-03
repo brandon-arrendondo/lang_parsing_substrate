@@ -3,6 +3,7 @@
 //! Also compiled under `lang-csharp` alone (see this module's `cfg` in
 //! `lib.rs`): [`crate::dead_code_csharp`] reuses this module's
 //! comment-scanning helper for its own commented-out-`#define` detection
+//! (which C and C++ no longer use: see below)
 //! rather than duplicating it — the two languages share the same `//`/`/*
 //! */` comment syntax, and the helper itself is pure text scanning with no
 //! grammar dependency either way.
@@ -17,15 +18,13 @@
 //! 1. `#if 0` and `__cplusplus`-gated branches — dead when the translation
 //!    unit is compiled as C.
 //! 2. `#ifdef MACRO` / `#if defined(MACRO)` where `MACRO`'s definedness is
-//!    locally provable from this file: unconditionally `#define`d earlier
-//!    with no later `#undef` (branch always live, its `#else` dead), or
-//!    never validly `#define`d in scope at this point — either not
-//!    mentioned at all except as a commented-out `#define`, or
-//!    unconditionally `#undef`d with no later `#define` (branch always
-//!    dead). A macro this file never mentions at all (e.g. a build-system
-//!    flag like `_WIN32`) is left unclassified — there's no local evidence
-//!    either way, and guessing would turn every such branch into a false
-//!    positive.
+//!    locally provable from this file: `#define`d on every path to this
+//!    point (branch always live, its `#else` dead), or `#undef`d on every
+//!    path (branch always dead). A macro this file never mentions at all
+//!    (e.g. a build-system flag like `_WIN32`) is left unclassified — there's
+//!    no local evidence either way, and guessing would turn every such branch
+//!    into a false positive. A commented-out `#define` is not evidence either:
+//!    the build can still pass `-DNAME`.
 //!
 //! Deliberately line-based, not tree-sitter-based: a header shaped like
 //!
@@ -46,24 +45,29 @@
 //! sidesteps that entirely, the same way [`mod@crate::suppressions`] and
 //! [`mod@crate::regions`] do.
 //!
-//! `#define`/`#undef` tracking counts a directive as long as it isn't inside
-//! a branch this scanner has already proven dead — not C brace/scope
-//! nesting, which `#define` doesn't respect anyway. This deliberately
-//! includes a `#define` nested inside an *unproven* (`Neutral`) branch of
-//! some other conditional: the scanner already treats such a branch as live
-//! for every other purpose (it can't prove otherwise), so treating its
-//! `#define` as having executed is the same assumption applied
-//! consistently. This matters in practice — real source commonly wraps an
-//! entire file in a single top-level module guard (`#if SUPPORT_MODULE_X`)
-//! that this scanner can't prove one way or the other, and requiring literal
-//! preprocessor-nesting depth zero would make every `#define` inside such a
-//! file invisible to sub-problem 2, silently disabling it for exactly the
-//! files it's meant to help. A `#define` inside a branch already proven dead
-//! does not count — that code never executes, so nothing was "defined".
+//! `#define`/`#undef` evidence follows the paths through each conditional,
+//! not literal nesting depth. Inside an arm, the arm's own `#define` holds
+//! for the rest of that arm — so a file wrapped in one module guard
+//! (`#if SUPPORT_MODULE_X`) that this scanner can't decide still has its
+//! `#define`s counted inside the guard, since nothing inside it compiles
+//! unless the guard is taken. At the `#endif` the arms meet again: a name
+//! keeps a value only if every arm that may be compiled, and the implicit
+//! empty `#else` when there is none, agree on it. So a `#define` under an
+//! undecided `#ifdef _WIN32` leaves the name undecided after the `#endif`
+//! (the POSIX build never ran it), while one in both arms of an `#if`/`#else`
+//! holds. An arm this scanner has proven dead contributes nothing, and an
+//! arm proven taken (the C side of `#ifndef __cplusplus`) is the only path.
+//! Directives inside comments, including multi-line `/* */` comments, are
+//! not directives.
 
-use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::HashMap;
+#[cfg(feature = "lang-csharp")]
+use std::collections::HashSet;
 
+#[cfg(feature = "lang-csharp")]
 use crate::regions::marker_text;
+#[cfg(feature = "lang-csharp")]
 use crate::registry::SlocMode;
 
 use BranchKind::{ElseDead, Neutral, ThenDead};
@@ -77,16 +81,15 @@ pub enum DeadCodeReason {
     /// Covers `#ifdef __cplusplus`, `#if defined(__cplusplus) [&&...]`, and
     /// the dead `#else` of `#ifndef __cplusplus` / `#if !defined(__cplusplus)`.
     CppOnly,
-    /// The macro is unconditionally `#define`d earlier in the file with no
-    /// later `#undef`, so the `#ifdef`/`#if defined(MACRO)` branch is always
+    /// The macro is `#define`d on every path to this point with no later
+    /// `#undef`, so the `#ifdef`/`#if defined(MACRO)` branch is always
     /// live and its `#else` is dead. Also produced, under
     /// [`dead_code_ranges_with_assumptions`], when the macro has no local
     /// `#define`/`#undef` of its own but the caller's [`PlatformAssumptions`]
     /// asserts it defined.
     AlwaysDefined,
-    /// The macro is never validly `#define`d in scope at this point — either
-    /// not mentioned at all except as a commented-out `#define`, or
-    /// unconditionally `#undef`d with no later `#define` — so the
+    /// The macro is `#undef`d on every path to this point with no later
+    /// `#define`, so the
     /// `#ifdef`/`#if defined(MACRO)` branch itself is dead. Also produced,
     /// under [`dead_code_ranges_with_assumptions`], when the macro has no
     /// local `#define`/`#undef` of its own but the caller's
@@ -125,6 +128,19 @@ struct Frame {
     /// (in which case this frame's own classification is moot — everything
     /// in it is already dead).
     self_caused: bool,
+    /// The `#if` itself is proven true, so its first arm is always taken and
+    /// no path skips the conditional.
+    then_taken: bool,
+    has_else: bool,
+    /// Whether the current arm can be compiled at all, as far as this
+    /// scanner knows. An arm inside a dead region writes nothing.
+    arm_live: bool,
+    /// Each name any arm of this conditional has written so far, with its
+    /// value at the `#if` (`None`: no evidence).
+    entry: HashMap<String, Option<Def>>,
+    /// For each finished live arm, the value at its end of each name in
+    /// `entry` at that time.
+    live_arms: Vec<HashMap<String, Option<Def>>>,
 }
 
 /// Assumed defined/undefined state for macros this file will never itself
@@ -191,90 +207,211 @@ fn dead_code_ranges_impl(
     source: &str,
     assumed: Option<&PlatformAssumptions>,
 ) -> Vec<DeadCodeRegion> {
-    let commented_out = commented_out_define_names(source);
-    let mut defined: HashMap<String, bool> = assumed.cloned().unwrap_or_default();
-    let mut regions = Vec::new();
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut dead_start: Option<usize> = None;
+    let mut scan = Scan {
+        defined: assumed
+            .map(|a| a.iter().map(|(k, &v)| (k.clone(), Def::from(v))).collect())
+            .unwrap_or_default(),
+        ..Scan::default()
+    };
+    let mut in_block_comment = false;
+    let mut total_lines = 0;
 
-    let lines: Vec<&str> = source.lines().collect();
-    let total_lines = lines.len();
+    for (idx, raw) in source.lines().enumerate() {
+        total_lines = idx + 1;
+        let line = strip_comments(raw, &mut in_block_comment);
+        if let Some((directive, rest)) = parse_directive(&line) {
+            scan.directive(idx + 1, directive, rest);
+        }
+    }
 
-    for (idx, line) in lines.iter().enumerate() {
-        let line_no = idx + 1;
-        let Some((directive, rest)) = parse_directive(line) else {
-            continue;
-        };
+    scan.finish(total_lines)
+}
 
+/// What this file proves about one macro name at a point in the scan.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Def {
+    Defined,
+    Undefined,
+    /// Defined on some path to this point and not on another: an arm this
+    /// scanner can't decide wrote it. Unlike a name with no entry at all,
+    /// this also overrides a caller's [`PlatformAssumptions`].
+    Unknown,
+}
+
+impl From<bool> for Def {
+    fn from(defined: bool) -> Self {
+        if defined {
+            Def::Defined
+        } else {
+            Def::Undefined
+        }
+    }
+}
+
+/// The value a name has on each of two paths that meet again: equal values
+/// survive, anything else is [`Def::Unknown`].
+fn join(a: Option<Def>, b: Option<Def>) -> Option<Def> {
+    if a == b {
+        a
+    } else {
+        Some(Def::Unknown)
+    }
+}
+
+#[derive(Default)]
+struct Scan {
+    defined: HashMap<String, Def>,
+    regions: Vec<DeadCodeRegion>,
+    stack: Vec<Frame>,
+    dead_start: Option<usize>,
+}
+
+impl Scan {
+    fn directive(&mut self, line_no: usize, directive: &str, rest: &str) {
         match directive {
-            "if" | "ifdef" | "ifndef" => {
-                let kind = if dead_start.is_some() {
-                    Neutral
-                } else {
-                    classify_conditional(directive, rest, &defined, &commented_out)
-                };
-                let self_caused = dead_start.is_none() && matches!(kind, ThenDead(_));
-                if self_caused {
-                    dead_start = Some(line_no + 1);
-                }
-                stack.push(Frame { kind, self_caused });
-            }
-            "elif" => {
-                if let Some(frame) = stack.last_mut() {
-                    if frame.self_caused {
-                        let kind = frame.kind;
-                        close_region(&mut regions, &mut dead_start, line_no - 1, kind);
-                        frame.self_caused = false;
-                    }
-                }
-            }
-            "else" => {
-                if let Some(frame) = stack.last_mut() {
-                    if frame.self_caused {
-                        let kind = frame.kind;
-                        close_region(&mut regions, &mut dead_start, line_no - 1, kind);
-                        frame.self_caused = false;
-                    } else if dead_start.is_none() && matches!(frame.kind, ElseDead(_)) {
-                        dead_start = Some(line_no + 1);
-                        frame.self_caused = true;
-                    }
-                }
-            }
-            "endif" => {
-                if let Some(frame) = stack.pop() {
-                    if frame.self_caused {
-                        close_region(&mut regions, &mut dead_start, line_no - 1, frame.kind);
-                    }
-                }
-            }
-            "define" if dead_start.is_none() => {
+            "if" | "ifdef" | "ifndef" => self.open(line_no, directive, rest),
+            "elif" => self.next_arm(line_no, false),
+            "else" => self.next_arm(line_no, true),
+            "endif" => self.close(line_no),
+            "define" | "undef" if self.dead_start.is_none() => {
                 if let Some(name) = first_ident(rest) {
-                    defined.insert(name.to_string(), true);
-                }
-            }
-            "undef" if dead_start.is_none() => {
-                if let Some(name) = first_ident(rest) {
-                    defined.insert(name.to_string(), false);
+                    self.set(name, Some(Def::from(directive == "define")));
                 }
             }
             _ => {}
         }
     }
 
-    if let Some(start) = dead_start {
-        let reason = stack
-            .iter()
-            .rev()
-            .find(|f| f.self_caused)
-            .and_then(|f| match f.kind {
-                ThenDead(r) | ElseDead(r) => Some(r),
-                Neutral => None,
-            })
-            .unwrap_or(DeadCodeReason::IfZero);
-        push_region(&mut regions, start, total_lines, reason);
+    fn open(&mut self, line_no: usize, directive: &str, rest: &str) {
+        let kind = if self.dead_start.is_some() {
+            Neutral
+        } else {
+            classify_conditional(directive, rest, &self.defined)
+        };
+        let self_caused = self.dead_start.is_none() && matches!(kind, ThenDead(_));
+        if self_caused {
+            self.dead_start = Some(line_no + 1);
+        }
+        self.stack.push(Frame {
+            kind,
+            self_caused,
+            then_taken: matches!(kind, ElseDead(_)),
+            has_else: false,
+            arm_live: self.dead_start.is_none(),
+            entry: HashMap::new(),
+            live_arms: Vec::new(),
+        });
     }
 
-    regions
+    /// `#elif` or `#else`: closes the current arm and opens the next.
+    fn next_arm(&mut self, line_no: usize, is_else: bool) {
+        if self.stack.is_empty() {
+            return;
+        }
+        self.end_arm();
+        let Some(frame) = self.stack.last_mut() else {
+            return;
+        };
+        if frame.self_caused {
+            let kind = frame.kind;
+            frame.self_caused = false;
+            close_region(&mut self.regions, &mut self.dead_start, line_no - 1, kind);
+        } else if is_else && self.dead_start.is_none() && matches!(frame.kind, ElseDead(_)) {
+            self.dead_start = Some(line_no + 1);
+            frame.self_caused = true;
+        }
+        frame.has_else |= is_else;
+        frame.arm_live = self.dead_start.is_none();
+    }
+
+    fn close(&mut self, line_no: usize) {
+        if self.stack.is_empty() {
+            return;
+        }
+        self.end_arm();
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        if frame.self_caused {
+            close_region(
+                &mut self.regions,
+                &mut self.dead_start,
+                line_no - 1,
+                frame.kind,
+            );
+        }
+        // A missing `#else` is an empty arm, taken whenever the condition
+        // is false: on that path every name keeps its value from the `#if`.
+        let implicit_else = !frame.has_else && !frame.then_taken;
+        for (name, before) in &frame.entry {
+            let mut values: Vec<Option<Def>> = frame
+                .live_arms
+                .iter()
+                .map(|arm| arm.get(name).copied().unwrap_or(*before))
+                .collect();
+            if implicit_else {
+                values.push(*before);
+            }
+            let after = values.into_iter().reduce(join).unwrap_or(*before);
+            self.set(name, after);
+        }
+    }
+
+    /// Records the current arm's writes (if it can be compiled at all) and
+    /// rewinds every name the conditional has written to its value at the
+    /// `#if`, so the next arm starts where the conditional did.
+    fn end_arm(&mut self) {
+        let Some(frame) = self.stack.last_mut() else {
+            return;
+        };
+        if frame.arm_live {
+            let arm = frame
+                .entry
+                .keys()
+                .map(|name| (name.clone(), self.defined.get(name).copied()))
+                .collect();
+            frame.live_arms.push(arm);
+        }
+        for (name, before) in &frame.entry {
+            match before {
+                Some(value) => self.defined.insert(name.clone(), *value),
+                None => self.defined.remove(name),
+            };
+        }
+    }
+
+    /// Writes `name`'s value, first noting what it was at the innermost
+    /// open conditional's `#if` so that conditional can rewind and join it.
+    fn set(&mut self, name: &str, value: Option<Def>) {
+        if let Some(frame) = self.stack.last_mut() {
+            if !frame.entry.contains_key(name) {
+                frame
+                    .entry
+                    .insert(name.to_string(), self.defined.get(name).copied());
+            }
+        }
+        match value {
+            Some(value) => self.defined.insert(name.to_string(), value),
+            None => self.defined.remove(name),
+        };
+    }
+
+    fn finish(mut self, total_lines: usize) -> Vec<DeadCodeRegion> {
+        if let Some(start) = self.dead_start {
+            let reason = self
+                .stack
+                .iter()
+                .rev()
+                .find(|f| f.self_caused)
+                .and_then(|f| match f.kind {
+                    ThenDead(r) | ElseDead(r) => Some(r),
+                    Neutral => None,
+                })
+                .unwrap_or(DeadCodeReason::IfZero);
+            push_region(&mut self.regions, start, total_lines, reason);
+        }
+        self.regions
+    }
 }
 
 fn close_region(
@@ -307,24 +444,15 @@ fn push_region(
 
 /// Classifies an `#if`/`#ifdef`/`#ifndef` line. `rest` is everything after
 /// the directive keyword, unparsed.
-fn classify_conditional(
-    directive: &str,
-    rest: &str,
-    defined: &HashMap<String, bool>,
-    commented_out: &HashSet<String>,
-) -> BranchKind {
+fn classify_conditional(directive: &str, rest: &str, defined: &HashMap<String, Def>) -> BranchKind {
     match directive {
-        "ifdef" => {
-            first_ident(rest).map_or(Neutral, |n| classify_name(n, false, defined, commented_out))
-        }
-        "ifndef" => {
-            first_ident(rest).map_or(Neutral, |n| classify_name(n, true, defined, commented_out))
-        }
+        "ifdef" => first_ident(rest).map_or(Neutral, |n| classify_name(n, false, defined)),
+        "ifndef" => first_ident(rest).map_or(Neutral, |n| classify_name(n, true, defined)),
         "if" => {
             if is_zero_condition(rest) {
                 ThenDead(DeadCodeReason::IfZero)
             } else {
-                classify_if_condition(rest, defined, commented_out)
+                classify_if_condition(rest, defined)
             }
         }
         _ => Neutral,
@@ -333,12 +461,7 @@ fn classify_conditional(
 
 /// Classifies a bare macro name from `#ifdef`/`#ifndef` (`is_ifndef` tells
 /// which) or from `defined(NAME)`/`!defined(NAME)` inside `#if`.
-fn classify_name(
-    name: &str,
-    is_ifndef: bool,
-    defined: &HashMap<String, bool>,
-    commented_out: &HashSet<String>,
-) -> BranchKind {
+fn classify_name(name: &str, is_ifndef: bool, defined: &HashMap<String, Def>) -> BranchKind {
     if name == "__cplusplus" {
         return if is_ifndef {
             ElseDead(DeadCodeReason::CppOnly)
@@ -347,28 +470,21 @@ fn classify_name(
         };
     }
     match defined.get(name) {
-        Some(true) => {
+        Some(Def::Defined) => {
             if is_ifndef {
                 ThenDead(DeadCodeReason::AlwaysDefined)
             } else {
                 ElseDead(DeadCodeReason::AlwaysDefined)
             }
         }
-        Some(false) => {
+        Some(Def::Undefined) => {
             if is_ifndef {
                 ElseDead(DeadCodeReason::NeverDefined)
             } else {
                 ThenDead(DeadCodeReason::NeverDefined)
             }
         }
-        None if commented_out.contains(name) => {
-            if is_ifndef {
-                ElseDead(DeadCodeReason::NeverDefined)
-            } else {
-                ThenDead(DeadCodeReason::NeverDefined)
-            }
-        }
-        None => Neutral,
+        Some(Def::Unknown) | None => Neutral,
     }
 }
 
@@ -377,17 +493,13 @@ fn classify_name(
 /// optionally followed by `&& ...` (only the `ThenDead` side survives a
 /// trailing `&&`, since a live-but-unproven first clause can't prove the
 /// whole condition either way).
-fn classify_if_condition(
-    rest: &str,
-    defined: &HashMap<String, bool>,
-    commented_out: &HashSet<String>,
-) -> BranchKind {
+fn classify_if_condition(rest: &str, defined: &HashMap<String, Def>) -> BranchKind {
     let trimmed = strip_trailing_comment(rest).trim();
 
     if let Some(after_bang) = trimmed.strip_prefix('!') {
         return match parse_defined(after_bang.trim_start()) {
             Some((name, remainder)) if remainder.trim().is_empty() => {
-                classify_name(name, true, defined, commented_out)
+                classify_name(name, true, defined)
             }
             _ => Neutral,
         };
@@ -395,7 +507,7 @@ fn classify_if_condition(
 
     match parse_defined(trimmed) {
         Some((name, remainder)) => {
-            let kind = classify_name(name, false, defined, commented_out);
+            let kind = classify_name(name, false, defined);
             let remainder = remainder.trim_start();
             let bare = remainder.is_empty();
             let leading_and = remainder.starts_with("&&") && matches!(kind, ThenDead(_));
@@ -459,6 +571,57 @@ fn first_ident(s: &str) -> Option<&str> {
     }
 }
 
+/// Removes the comments from one line of C source, replacing each with a
+/// space as the preprocessor does. `in_block` carries an unterminated
+/// `/* */` from one line to the next, so a line wholly inside a block
+/// comment comes back blank and a `#define` or `#if` written in a comment is
+/// never read as a directive. String and character literals are skipped, so
+/// the `/*` in `"/*"` opens nothing.
+fn strip_comments<'a>(line: &'a str, in_block: &mut bool) -> Cow<'a, str> {
+    if !*in_block && !line.contains("/*") && !line.contains("//") {
+        return Cow::Borrowed(line);
+    }
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    // Start of the text not yet copied (or skipped, inside a comment). Every
+    // index it takes sits next to an ASCII byte, so it is a char boundary.
+    let mut keep_from = 0;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        let next = bytes.get(i + 1).copied();
+        if *in_block {
+            if c == b'*' && next == Some(b'/') {
+                *in_block = false;
+                keep_from = i + 2;
+                i += 1;
+            }
+        } else if let Some(q) = quote {
+            if c == b'\\' {
+                i += 1;
+            } else if c == q {
+                quote = None;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = Some(c);
+        } else if c == b'/' && (next == Some(b'/') || next == Some(b'*')) {
+            out.push_str(&line[keep_from..i]);
+            out.push(' ');
+            if next == Some(b'/') {
+                return Cow::Owned(out);
+            }
+            *in_block = true;
+            i += 1;
+        }
+        i += 1;
+    }
+    if !*in_block {
+        out.push_str(&line[keep_from.min(line.len())..]);
+    }
+    Cow::Owned(out)
+}
+
 /// Splits `line` into a leading `#`-directive keyword and the rest of the
 /// line, if `line` is a preprocessor directive at all.
 fn parse_directive(line: &str) -> Option<(&str, &str)> {
@@ -477,7 +640,10 @@ fn parse_directive(line: &str) -> Option<(&str, &str)> {
 /// Collects every macro name that appears as a commented-out `#define` (a
 /// whole line that is entirely a `//` or single-line `/* */` comment whose
 /// content is a `#define NAME` directive) anywhere in `source` — evidence
-/// that the macro was meant to be locally defined but currently isn't.
+/// that the macro was meant to be locally defined but currently isn't. Only
+/// the C# scanner uses it: for C and C++ a commented-out `#define` is no
+/// evidence, since the build can still pass `-DNAME`.
+#[cfg(feature = "lang-csharp")]
 pub(crate) fn commented_out_define_names(source: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     for line in source.lines() {
@@ -587,10 +753,10 @@ mod tests {
         assert_eq!(ranges(src), vec![(6, 6, DeadCodeReason::AlwaysDefined)]);
     }
 
-    // Raylib rtext.c-shaped case 2: macro's #define is commented
-    // out — the #if defined(...) branch itself is dead.
+    // A commented-out `#define` is not evidence: `-DSUPPORT_FONT_DATA_COPY`
+    // still compiles the branch.
     #[test]
-    fn commented_out_define_makes_branch_dead() {
+    fn commented_out_define_is_not_evidence() {
         let src = concat!(
             "//#define SUPPORT_FONT_DATA_COPY\n",    // 1
             "void f(void) {\n",                      // 2
@@ -599,7 +765,50 @@ mod tests {
             "#endif\n",                              // 5
             "}\n",                                   // 6
         );
-        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::NeverDefined)]);
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn block_commented_define_is_not_evidence() {
+        let src = "/* #define HAVE_FOO */\n#ifdef HAVE_FOO\n#include \"foo.h\"\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn directives_inside_a_multi_line_comment_are_ignored() {
+        let src = concat!(
+            "/*\n",                 // 1
+            "#define HAVE_FOO\n",   // 2
+            "#if 0\n",              // 3
+            "*/\n",                 // 4
+            "#ifdef HAVE_FOO\n",    // 5
+            "#include \"foo.h\"\n", // 6
+            "#else\n",              // 7
+            "bar();\n",             // 8
+            "#endif\n",             // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn string_literal_holding_comment_or_define_text_changes_nothing() {
+        let src = concat!(
+            "const char *s = \"/*\";\n",          // 1
+            "const char *t = \"#define FOO\";\n", // 2
+            "#define FOO\n",                      // 3
+            "#ifdef FOO\n",                       // 4
+            "live();\n",                          // 5
+            "#else\n",                            // 6
+            "dead();\n",                          // 7
+            "#endif\n",                           // 8
+        );
+        assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    #[test]
+    fn define_after_trailing_block_comment_close_still_counts() {
+        let src = "/* note\n */ #define FOO\n#ifndef FOO\ndead();\n#endif\n";
+        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::AlwaysDefined)]);
     }
 
     #[test]
@@ -631,17 +840,140 @@ mod tests {
         assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
     }
 
+    // A #define inside an arm this scanner can't decide holds only on the
+    // path through that arm: after the #endif, the path that skipped the arm
+    // has FOO undefined, so neither branch of `#ifdef FOO` is dead.
     #[test]
-    fn define_inside_unproven_branch_still_counts() {
-        // FOO is #define'd inside an *unproven* (`Neutral`) `#ifndef BAR`
-        // branch — this scanner can't prove BAR either way, so it already
-        // treats that branch as live everywhere else; the #define should be
-        // trusted the same way. The raylib case below is exactly this
-        // shape one level up: the whole file wrapped in an unprovable
-        // `#if SUPPORT_MODULE_X` guard.
+    fn define_inside_unproven_branch_is_undecided_after_it() {
         let src = "#ifndef BAR\n#define FOO\n#endif\n\
-                   #ifdef FOO\nlive();\n#else\ndead();\n#endif\n";
+                   #ifdef FOO\nlive();\n#else\nlive_too();\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn define_under_platform_arm_leaves_posix_else_live() {
+        let src = concat!(
+            "#ifdef _WIN32\n",        // 1
+            "#define USE_W\n",        // 2
+            "#endif\n",               // 3
+            "#ifdef USE_W\n",         // 4
+            "#include <windows.h>\n", // 5
+            "#else\n",                // 6
+            "#include \"posix.h\"\n", // 7
+            "#endif\n",               // 8
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn define_in_every_arm_of_an_undecided_conditional_counts() {
+        let src = concat!(
+            "#ifdef _WIN32\n",      // 1
+            "#define SEP '\\\\'\n", // 2
+            "#else\n",              // 3
+            "#define SEP '/'\n",    // 4
+            "#endif\n",             // 5
+            "#ifndef SEP\n",        // 6
+            "dead();\n",            // 7
+            "#endif\n",             // 8
+        );
         assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    #[test]
+    fn define_in_one_elif_arm_only_is_undecided() {
+        let src = concat!(
+            "#if defined(A)\n",   // 1
+            "#define X\n",        // 2
+            "#elif defined(B)\n", // 3
+            "#define X\n",        // 4
+            "#else\n",            // 5
+            "#endif\n",           // 6
+            "#ifdef X\n",         // 7
+            "x();\n",             // 8
+            "#endif\n",           // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn define_inside_proven_live_arm_counts_after_it() {
+        // `#ifndef __cplusplus` is proven taken when built as C, so its
+        // #define holds after the #endif.
+        let src = concat!(
+            "#ifndef __cplusplus\n", // 1
+            "#define C_ONLY\n",      // 2
+            "#endif\n",              // 3
+            "#ifdef C_ONLY\n",       // 4
+            "live();\n",             // 5
+            "#else\n",               // 6
+            "dead();\n",             // 7
+            "#endif\n",              // 8
+        );
+        assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    #[test]
+    fn define_inside_live_else_of_if_zero_counts_after_it() {
+        let src = "#if 0\n#define X 1\n#else\n#define Y\n#endif\n\
+                   #ifdef Y\nlive();\n#else\ndead();\n#endif\n\
+                   #ifdef X\nx();\n#endif\n";
+        assert_eq!(
+            ranges(src),
+            vec![
+                (2, 2, DeadCodeReason::IfZero),
+                (9, 9, DeadCodeReason::AlwaysDefined),
+            ]
+        );
+    }
+
+    #[test]
+    fn undef_inside_undecided_arm_is_undecided_after_it() {
+        let src = "#define FOO\n#ifdef _WIN32\n#undef FOO\n#endif\n\
+                   #ifdef FOO\nmaybe();\n#else\nmaybe_too();\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn include_guard_defines_hold_inside_the_guard() {
+        let src = concat!(
+            "#ifndef FOO_H\n", // 1
+            "#define FOO_H\n", // 2
+            "#define USE_X\n", // 3
+            "#ifdef USE_X\n",  // 4
+            "live();\n",       // 5
+            "#else\n",         // 6
+            "dead();\n",       // 7
+            "#endif\n",        // 8
+            "#ifndef FOO_H\n", // 9
+            "dead_too();\n",   // 10
+            "#endif\n",        // 11
+            "#endif\n",        // 12
+        );
+        assert_eq!(
+            ranges(src),
+            vec![
+                (7, 7, DeadCodeReason::AlwaysDefined),
+                (10, 10, DeadCodeReason::AlwaysDefined),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_if_zero_inside_live_arm_is_dead() {
+        let src = "#ifdef _WIN32\na();\n#if 0\nb();\n#endif\nc();\n#endif\n";
+        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn local_undecided_define_overrides_assumption() {
+        // An assumption is a stand-in for missing evidence; once an undecided
+        // arm writes the name, the file has said something and it is unknown.
+        let src = "#ifdef CONFIG_X\n#define _MSC_VER 1900\n#endif\n\
+                   #ifdef _MSC_VER\nmaybe();\n#endif\n";
+        let mut assumed = PlatformAssumptions::new();
+        assumed.insert("_MSC_VER".to_string(), false);
+        assert!(ranges_with(src, &assumed).is_empty());
     }
 
     // Raylib rtext.c's actual shape: the whole file is

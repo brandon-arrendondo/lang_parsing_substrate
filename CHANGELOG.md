@@ -3,6 +3,25 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## Unreleased
+
+### Fixed
+
+- `dead_code_ranges` and `dead_code_ranges_with_assumptions` no longer mark
+  a live preprocessor branch dead on the strength of a `#define` or `#undef`
+  that may not run. A `#define` inside a branch the scanner can't decide
+  (`#ifdef _WIN32` / `#define USE_W` / `#endif`) used to count as
+  unconditional, so a later `#ifdef USE_W ... #else ... #endif` had its
+  `#else`, the branch a POSIX build compiles, reported dead. Now the
+  definition holds inside that branch only, and after its `#endif` the
+  name is undecided unless every branch that may compile agrees. A
+  definition in a branch proven taken, or in both branches of an
+  `#if`/`#else`, still counts, as does one inside a file-wide guard for the
+  code inside the guard.
+- A commented-out `#define NAME` no longer marks `#ifdef NAME` dead: the
+  build can still pass `-DNAME`. A `#define`, `#undef` or `#if` inside a
+  multi-line `/* */` comment is no longer read as a directive either.
+
 ## 0.15.0 — 2026-11-03
 
 ### Added
