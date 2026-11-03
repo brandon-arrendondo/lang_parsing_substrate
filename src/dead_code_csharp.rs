@@ -20,14 +20,13 @@
 //! Unlike Swift, C# *does* have `#define`/`#undef` — real top-level nodes
 //! (confirmed: `preproc_define` appears as a direct child of
 //! `compilation_unit`, sibling to `using_directive`/`class_declaration`),
-//! so [`crate::dead_code`]'s sub-problem 2 (locally-provable named-symbol
-//! definedness) ports over directly: a symbol unconditionally `#define`d
-//! earlier in the file with no later `#undef` is always-defined; a symbol
-//! that's `#undef`d with no later `#define`, or never validly `#define`d
-//! (only as a commented-out `#define`), is never-defined. As in
-//! [`crate::dead_code`], "unconditional" means not nested inside *any*
-//! `#if`/`#elif`/`#else` at all — not C-brace/scope nesting, which
-//! `#define` doesn't respect anyway.
+//! so locally-provable symbol definedness ports over: a symbol
+//! unconditionally `#define`d earlier in the file with no later `#undef` is
+//! always-defined, and one `#undef`d with no later `#define` is
+//! never-defined. "Unconditional" means not nested inside *any*
+//! `#if`/`#elif`/`#else` at all. A commented-out `#define` is no evidence,
+//! as in [`crate::dead_code`]: the build can still define the symbol
+//! (`-define:`, `DefineConstants`).
 //!
 //! C# also has no `#ifdef`/`#ifndef` — only `#if`/`#elif` with a boolean
 //! condition expression (`identifier`, `true`/`false` literals, `!`, `&&`,
@@ -40,8 +39,6 @@
 use std::collections::HashMap;
 
 use tree_sitter::{Node, Parser};
-
-use crate::dead_code::commented_out_define_names;
 
 /// A C# preprocessor-dead region: an `#if`/`#elif`/`#else` branch proven
 /// unreachable by a compile-time-constant condition or locally-provable
@@ -69,20 +66,9 @@ pub fn csharp_dead_code_regions(source: &[u8]) -> Vec<CSharpDeadCodeRegion> {
         return Vec::new();
     };
 
-    let commented_out = match std::str::from_utf8(source) {
-        Ok(text) => commented_out_define_names(text),
-        Err(_) => Default::default(),
-    };
     let mut defined: HashMap<String, bool> = HashMap::new();
     let mut regions = Vec::new();
-    walk(
-        tree.root_node(),
-        source,
-        0,
-        &mut defined,
-        &commented_out,
-        &mut regions,
-    );
+    walk(tree.root_node(), source, 0, &mut defined, &mut regions);
     regions
 }
 
@@ -95,12 +81,11 @@ fn walk(
     source: &[u8],
     depth: usize,
     defined: &mut HashMap<String, bool>,
-    commented_out: &std::collections::HashSet<String>,
     out: &mut Vec<CSharpDeadCodeRegion>,
 ) {
     let mut cursor = node.walk();
     let children: Vec<Node> = node.named_children(&mut cursor).collect();
-    walk_siblings(&children, source, depth, defined, commented_out, out);
+    walk_siblings(&children, source, depth, defined, out);
 }
 
 /// Same as [`walk`], but over an arbitrary already-collected slice of
@@ -114,7 +99,6 @@ fn walk_siblings(
     source: &[u8],
     depth: usize,
     defined: &mut HashMap<String, bool>,
-    commented_out: &std::collections::HashSet<String>,
     out: &mut Vec<CSharpDeadCodeRegion>,
 ) {
     for child in children {
@@ -130,8 +114,8 @@ fn walk_siblings(
                 }
             }
             "preproc_define" | "preproc_undef" => {}
-            "preproc_if" => walk_chain(*child, source, depth, defined, commented_out, out),
-            _ => walk(*child, source, depth, defined, commented_out, out),
+            "preproc_if" => walk_chain(*child, source, depth, defined, out),
+            _ => walk(*child, source, depth, defined, out),
         }
     }
 }
@@ -143,7 +127,6 @@ fn walk_chain(
     source: &[u8],
     depth: usize,
     defined: &mut HashMap<String, bool>,
-    commented_out: &std::collections::HashSet<String>,
     out: &mut Vec<CSharpDeadCodeRegion>,
 ) {
     // Whether an earlier branch in this chain was proven to always run —
@@ -163,16 +146,16 @@ fn walk_chain(
             match condition {
                 None => {
                     // #else has no condition of its own.
-                    walk_siblings(&body, source, depth + 1, defined, commented_out, out);
+                    walk_siblings(&body, source, depth + 1, defined, out);
                 }
-                Some(cond) => match eval_condition(cond, source, defined, commented_out) {
+                Some(cond) => match eval_condition(cond, source, defined) {
                     Some(true) => {
                         chain_resolved_true = true;
-                        walk_siblings(&body, source, depth + 1, defined, commented_out, out);
+                        walk_siblings(&body, source, depth + 1, defined, out);
                     }
                     Some(false) => push_dead_range(&body, out),
                     None => {
-                        walk_siblings(&body, source, depth + 1, defined, commented_out, out);
+                        walk_siblings(&body, source, depth + 1, defined, out);
                     }
                 },
             }
@@ -211,12 +194,7 @@ fn push_dead_range(body: &[Node], out: &mut Vec<CSharpDeadCodeRegion>) {
 /// boolean, if locally provable — `None` as soon as any operand can't be
 /// resolved (an unrecognized construct, or a symbol with no local
 /// evidence), except where `&&`/`||` short-circuits past it.
-fn eval_condition(
-    node: Node,
-    source: &[u8],
-    defined: &HashMap<String, bool>,
-    commented_out: &std::collections::HashSet<String>,
-) -> Option<bool> {
+fn eval_condition(node: Node, source: &[u8], defined: &HashMap<String, bool>) -> Option<bool> {
     match node.kind() {
         "boolean_literal" => match node.utf8_text(source) {
             Ok("true") => Some(true),
@@ -225,28 +203,22 @@ fn eval_condition(
         },
         "identifier" => {
             let name = node.utf8_text(source).ok()?;
-            match defined.get(name) {
-                Some(v) => Some(*v),
-                None if commented_out.contains(name) => Some(false),
-                None => None,
-            }
+            defined.get(name).copied()
         }
-        "parenthesized_expression" => {
-            eval_condition(node.named_child(0)?, source, defined, commented_out)
-        }
+        "parenthesized_expression" => eval_condition(node.named_child(0)?, source, defined),
         "unary_expression" => {
             if node.child_by_field_name("operator")?.kind() != "!" {
                 return None;
             }
             let arg = node.child_by_field_name("argument")?;
-            Some(!eval_condition(arg, source, defined, commented_out)?)
+            Some(!eval_condition(arg, source, defined)?)
         }
         "binary_expression" => {
             let op = node.child_by_field_name("operator")?.kind();
             let left = node.child_by_field_name("left")?;
             let right = node.child_by_field_name("right")?;
-            let l = eval_condition(left, source, defined, commented_out);
-            let r = eval_condition(right, source, defined, commented_out);
+            let l = eval_condition(left, source, defined);
+            let r = eval_condition(right, source, defined);
             match op {
                 "&&" => match (l, r) {
                     (Some(false), _) | (_, Some(false)) => Some(false),
@@ -340,14 +312,29 @@ mod tests {
     }
 
     #[test]
-    fn commented_out_define_makes_branch_dead() {
+    fn commented_out_define_is_not_evidence() {
+        // The build can still define FOO (`-define:FOO`, `DefineConstants`).
+        for comment in ["//#define FOO\n", "// #define FOO\n", "/* #define FOO */\n"] {
+            let src = format!("{comment}#if FOO\nint a = 1;\n#else\nint b = 2;\n#endif\n");
+            assert!(ranges(&src).is_empty(), "{comment}");
+        }
+    }
+
+    #[test]
+    fn real_define_still_decides_next_to_a_commented_one() {
         let src = concat!(
-            "//#define FOO\n", // 1
-            "#if FOO\n",       // 2
-            "int a = 1;\n",    // 3
-            "#endif\n",        // 4
+            "// #define BAR\n", // 1
+            "#define FOO\n",    // 2
+            "#if FOO\n",        // 3
+            "int a = 1;\n",     // 4
+            "#else\n",          // 5
+            "int b = 2;\n",     // 6
+            "#endif\n",         // 7
+            "#if !FOO\n",       // 8
+            "int c = 3;\n",     // 9
+            "#endif\n",         // 10
         );
-        assert_eq!(ranges(src), vec![(3, 3)]);
+        assert_eq!(ranges(src), vec![(6, 6), (9, 9)]);
     }
 
     #[test]

@@ -5,6 +5,14 @@ releases are recorded only in the git tags and history.
 
 ## Unreleased
 
+### Fixed
+
+- `csharp_dead_code_regions` no longer marks `#if FOO` dead because the file
+  has a commented-out `#define FOO` (`// #define FOO`, `/* #define FOO */`):
+  the build can still define the symbol with `-define:` or
+  `DefineConstants`. This is the rule C and C++ follow since 0.16.0. A
+  real `#define` or `#undef` at the top of the file still decides.
+
 ## 0.16.0 — 2026-11-03
 
 ### Fixed

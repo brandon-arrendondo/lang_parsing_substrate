@@ -1,12 +1,8 @@
 //! Preprocessor dead-code region detection for C/C++.
 //!
 //! Also compiled under `lang-csharp` alone (see this module's `cfg` in
-//! `lib.rs`): [`crate::dead_code_csharp`] reuses this module's
-//! comment-scanning helper for its own commented-out-`#define` detection
-//! (which C and C++ no longer use: see below)
-//! rather than duplicating it — the two languages share the same `//`/`/*
-//! */` comment syntax, and the helper itself is pure text scanning with no
-//! grammar dependency either way.
+//! `lib.rs`), which keeps its public functions available to a C#-only
+//! build. It has no grammar dependency: it is pure text scanning.
 //!
 //! Computes the 1-based inclusive line ranges of a C/C++ translation unit
 //! that a preprocessor would strip before the compiler ever sees them. This
@@ -66,11 +62,6 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-
-#[cfg(feature = "lang-csharp")]
-use crate::regions::marker_text;
-#[cfg(feature = "lang-csharp")]
-use crate::registry::SlocMode;
 
 use BranchKind::{ElseDead, Neutral, ThenDead};
 
@@ -907,32 +898,6 @@ fn parse_directive(line: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((&after_hash[..word_end], &after_hash[word_end..]))
-}
-
-/// Collects every macro name that appears as a commented-out `#define` (a
-/// whole line that is entirely a `//` or single-line `/* */` comment whose
-/// content is a `#define NAME` directive) anywhere in `source` — evidence
-/// that the macro was meant to be locally defined but currently isn't. Only
-/// the C# scanner uses it: for C and C++ a commented-out `#define` is no
-/// evidence, since the build can still pass `-DNAME`.
-#[cfg(feature = "lang-csharp")]
-pub(crate) fn commented_out_define_names(source: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for line in source.lines() {
-        let Some(text) = marker_text(line, SlocMode::Default) else {
-            continue;
-        };
-        let Some(rest) = text.trim_start().strip_prefix('#') else {
-            continue;
-        };
-        let Some(rest) = rest.trim_start().strip_prefix("define") else {
-            continue;
-        };
-        if let Some(name) = first_ident(rest) {
-            out.insert(name.to_string());
-        }
-    }
-    out
 }
 
 #[cfg(test)]
