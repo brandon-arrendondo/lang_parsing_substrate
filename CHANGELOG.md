@@ -13,6 +13,19 @@ releases are recorded only in the git tags and history.
   `DefineConstants`. This is the rule C and C++ follow since 0.16.0. A
   real `#define` or `#undef` at the top of the file still decides.
 
+### Changed
+
+- `dead_code_ranges` and `dead_code_ranges_with_assumptions` now report as
+  dead the arms that follow a literal-true condition: the `#elif` and
+  `#else` arms of `#if 1`, and those after an `#elif 1` that is reached.
+  No configuration compiles them. They are reported with
+  `DeadCodeReason::IfZero`, now documented as "a literal constant
+  condition", so no new variant is needed and a `match` on
+  `DeadCodeReason` still compiles. A region 0.16.0 already reported keeps
+  its reason: the `#else` of `#ifdef F` with F defined stays
+  `AlwaysDefined` even after an `#elif 1`. A consumer gets more dead
+  lines, never fewer.
+
 ## 0.16.0 — 2026-11-03
 
 ### Fixed

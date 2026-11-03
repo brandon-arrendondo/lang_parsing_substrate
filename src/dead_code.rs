@@ -11,8 +11,9 @@
 //! (e.g. a `#if 0` nested inside a dead `#ifdef MACRO` region, or vice
 //! versa):
 //!
-//! 1. `#if 0` and `__cplusplus`-gated branches — dead when the translation
-//!    unit is compiled as C.
+//! 1. `#if 0`, the arms after a literal-true `#if 1` or `#elif 1`, and
+//!    `__cplusplus`-gated branches — dead when the translation unit is
+//!    compiled as C.
 //! 2. `#ifdef MACRO` / `#if defined(MACRO)` where `MACRO`'s definedness is
 //!    locally provable from this file: `#define`d on every path to this
 //!    point (branch always live, its `#else` dead), or `#undef`d on every
@@ -68,7 +69,9 @@ use BranchKind::{ElseDead, Neutral, ThenDead};
 /// Why a [`DeadCodeRegion`] is provably never compiled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadCodeReason {
-    /// `#if 0`.
+    /// A literal constant condition: the first arm of `#if 0`, and every arm
+    /// after a literal-true one (the `#elif`/`#else` arms of `#if 1`, or those
+    /// after an `#elif 1` that is reached).
     IfZero,
     /// C++-only branch, dead when the translation unit is built as C.
     /// Covers `#ifdef __cplusplus`, `#if defined(__cplusplus) [&&...]`, and
@@ -126,6 +129,11 @@ struct Frame {
     /// conditional: no `#elif`/`#else` arm and no skipping path joins it.
     then_taken: bool,
     has_else: bool,
+    /// A live arm with a literal-true condition (`#if 1`, `#elif 1`) has
+    /// begun: every later arm is dead.
+    true_arm_seen: bool,
+    /// The arms from here to `#endif` are dead because of such an arm.
+    rest_dead: bool,
     /// Whether an `#elif`/`#else` has been reached, so the current arm is no
     /// longer the first.
     left_first_arm: bool,
@@ -329,8 +337,8 @@ impl Scan {
     fn directive(&mut self, line_no: usize, directive: &str, rest: &str) {
         match directive {
             "if" | "ifdef" | "ifndef" => self.open(line_no, directive, rest),
-            "elif" => self.next_arm(line_no, false),
-            "else" => self.next_arm(line_no, true),
+            "elif" => self.next_arm(line_no, Some(rest)),
+            "else" => self.next_arm(line_no, None),
             "endif" => self.close(line_no),
             "define" | "undef" if self.dead_start.is_none() => {
                 if let Some(name) = first_ident(rest) {
@@ -357,6 +365,8 @@ impl Scan {
             then_taken: matches!(kind, ElseDead(_))
                 || (self.dead_start.is_none() && directive == "if" && is_one_condition(rest)),
             has_else: false,
+            true_arm_seen: self.dead_start.is_none() && directive == "if" && is_one_condition(rest),
+            rest_dead: false,
             left_first_arm: false,
             arm_live: self.dead_start.is_none(),
             entry: HashMap::new(),
@@ -366,8 +376,9 @@ impl Scan {
         });
     }
 
-    /// `#elif` or `#else`: closes the current arm and opens the next.
-    fn next_arm(&mut self, line_no: usize, is_else: bool) {
+    /// `#elif` (`elif_condition` is its condition) or `#else`: closes the
+    /// current arm and opens the next.
+    fn next_arm(&mut self, line_no: usize, elif_condition: Option<&str>) {
         if self.stack.is_empty() {
             return;
         }
@@ -375,15 +386,31 @@ impl Scan {
         let Some(frame) = self.stack.last_mut() else {
             return;
         };
+        let is_else = elif_condition.is_none();
+        frame.has_else |= is_else;
+        if frame.rest_dead {
+            // Still inside the dead run that follows a literal-true arm.
+            frame.arm_live = false;
+            return;
+        }
         if frame.self_caused {
             let kind = frame.kind;
             frame.self_caused = false;
             close_region(&mut self.regions, &mut self.dead_start, line_no - 1, kind);
+        } else if self.dead_start.is_none() && frame.true_arm_seen {
+            // An arm with a literal-true condition (`#if 1`, or an `#elif 1`
+            // reached) is taken whenever it is reached, so no later arm is.
+            self.dead_start = Some(line_no + 1);
+            frame.self_caused = true;
+            frame.rest_dead = true;
+            frame.kind = ElseDead(DeadCodeReason::IfZero);
         } else if is_else && self.dead_start.is_none() && matches!(frame.kind, ElseDead(_)) {
             self.dead_start = Some(line_no + 1);
             frame.self_caused = true;
         }
-        frame.has_else |= is_else;
+        if self.dead_start.is_none() && elif_condition.is_some_and(is_one_condition) {
+            frame.true_arm_seen = true;
+        }
         frame.arm_live = self.dead_start.is_none();
     }
 
@@ -408,7 +435,8 @@ impl Scan {
         // except that a tested macro has the definedness that skipped the
         // arm (`#ifndef X` / `#define X 1` / `#endif` leaves X defined on
         // both paths).
-        let implicit_else = !frame.has_else && !frame.then_taken;
+        // No path skips a conditional with a literal-true arm.
+        let implicit_else = !frame.has_else && !frame.then_taken && !frame.true_arm_seen;
         let paths = frame.live_arms.len() + usize::from(implicit_else);
         let tested = frame.tested.as_ref().map(|(name, _)| name.as_str());
         // Join each written name over the paths that wrote it, then with its
@@ -683,8 +711,8 @@ fn parse_defined(s: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// `#if 1`: used only to know that its first arm is always taken. Its
-/// `#elif`/`#else` arms are not reported dead.
+/// A literal-true `#if 1` or `#elif 1` condition: that arm is taken whenever
+/// it is reached, so every later arm of the conditional is dead.
 fn is_one_condition(rest: &str) -> bool {
     let stripped: String = strip_trailing_comment(rest)
         .chars()
@@ -1200,12 +1228,12 @@ mod tests {
     fn else_of_fast_after(default: &str) -> Vec<(usize, usize, DeadCodeReason)> {
         let src = format!("{default}#ifdef FAST\nfast();\n#else\nslow();\n#endif\n");
         let slow = default.lines().count() + 4;
-        let got = ranges(&src);
-        assert!(
-            got.iter().all(|&(a, b, _)| a <= slow && slow <= b) || got.is_empty(),
-            "{default}: {got:?}"
-        );
-        got.into_iter().filter(|&(a, _, _)| a == slow).collect()
+        // Only the region at the `#else` matters here; the default itself
+        // may sit in a conditional with dead arms of its own.
+        ranges(&src)
+            .into_iter()
+            .filter(|&(a, _, _)| a == slow)
+            .collect()
     }
 
     #[test]
@@ -1413,8 +1441,76 @@ mod tests {
     }
 
     #[test]
-    fn the_else_of_if_1_is_not_reported_dead() {
-        assert!(ranges("#if 1\na();\n#else\nb();\n#endif\n").is_empty());
+    fn the_else_of_if_1_is_dead() {
+        assert_eq!(
+            ranges("#if 1\na();\n#else\nb();\n#endif\n"),
+            vec![(4, 4, DeadCodeReason::IfZero)]
+        );
+        assert_eq!(
+            ranges("#if (1) // on\na();\n#else\nb();\n#endif\n"),
+            vec![(4, 4, DeadCodeReason::IfZero)]
+        );
+    }
+
+    #[test]
+    fn every_arm_after_if_1_is_dead() {
+        let src = concat!(
+            "#if 1\n",   // 1
+            "a();\n",    // 2
+            "#elif X\n", // 3
+            "b();\n",    // 4
+            "#elif 1\n", // 5
+            "c();\n",    // 6
+            "#else\n",   // 7
+            "d();\n",    // 8
+            "#endif\n",  // 9
+            "e();\n",    // 10
+        );
+        assert_eq!(ranges(src), vec![(4, 8, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn the_else_after_a_reached_elif_1_is_dead() {
+        let src = concat!(
+            "#if 0\n",   // 1
+            "a();\n",    // 2
+            "#elif 1\n", // 3
+            "b();\n",    // 4
+            "#else\n",   // 5
+            "c();\n",    // 6
+            "#endif\n",  // 7
+        );
+        assert_eq!(
+            ranges(src),
+            vec![
+                (2, 2, DeadCodeReason::IfZero),
+                (6, 6, DeadCodeReason::IfZero)
+            ]
+        );
+        // After an undecided arm, `#elif 1` still makes the `#else` dead.
+        let after_x = "#if X\na();\n#elif 1\nb();\n#else\nc();\n#endif\n";
+        assert_eq!(ranges(after_x), vec![(6, 6, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn if_1_inside_a_dead_region_adds_nothing() {
+        let src = "#if 0\n#if 1\na();\n#else\nb();\n#endif\n#endif\n";
+        assert_eq!(ranges(src), vec![(2, 6, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn nested_if_1_else_inside_a_live_arm_is_dead() {
+        let src = "#ifdef X\n#if 1\na();\n#else\nb();\n#endif\n#endif\n";
+        assert_eq!(ranges(src), vec![(5, 5, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn a_define_after_elif_1_without_else_holds_after_endif() {
+        // No path skips `#if X ... #elif 1 ... #endif`, and both arms define
+        // FOO, so FOO is defined after it.
+        let src = "#if X\n#define FOO\n#elif 1\n#define FOO\n#endif\n\
+                   #ifndef FOO\ndead();\n#endif\n";
+        assert_eq!(ranges(src), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
     }
 
     #[test]
