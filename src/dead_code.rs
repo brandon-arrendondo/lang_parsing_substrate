@@ -397,9 +397,14 @@ impl Scan {
             let kind = frame.kind;
             frame.self_caused = false;
             close_region(&mut self.regions, &mut self.dead_start, line_no - 1, kind);
-        } else if self.dead_start.is_none() && frame.true_arm_seen {
+        } else if self.dead_start.is_none()
+            && frame.true_arm_seen
+            && !matches!(frame.kind, ElseDead(_))
+        {
             // An arm with a literal-true condition (`#if 1`, or an `#elif 1`
             // reached) is taken whenever it is reached, so no later arm is.
+            // A conditional whose first arm is already proven taken keeps its
+            // own reason for the dead `#else` (the branch below).
             self.dead_start = Some(line_no + 1);
             frame.self_caused = true;
             frame.rest_dead = true;
@@ -1490,6 +1495,31 @@ mod tests {
         // After an undecided arm, `#elif 1` still makes the `#else` dead.
         let after_x = "#if X\na();\n#elif 1\nb();\n#else\nc();\n#endif\n";
         assert_eq!(ranges(after_x), vec![(6, 6, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn elif_1_after_a_proven_first_arm_keeps_the_else_reason() {
+        let defined = concat!(
+            "#define F\n", // 1
+            "#ifdef F\n",  // 2
+            "a();\n",      // 3
+            "#elif 1\n",   // 4
+            "b();\n",      // 5
+            "#else\n",     // 6
+            "c();\n",      // 7
+            "#endif\n",    // 8
+        );
+        assert_eq!(ranges(defined), vec![(7, 7, DeadCodeReason::AlwaysDefined)]);
+        let c_only = concat!(
+            "#ifndef __cplusplus\n", // 1
+            "a();\n",                // 2
+            "#elif 1\n",             // 3
+            "b();\n",                // 4
+            "#else\n",               // 5
+            "c();\n",                // 6
+            "#endif\n",              // 7
+        );
+        assert_eq!(ranges(c_only), vec![(6, 6, DeadCodeReason::CppOnly)]);
     }
 
     #[test]
