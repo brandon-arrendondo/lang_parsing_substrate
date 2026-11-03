@@ -3,18 +3,27 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
-## Unreleased
+## 0.15.0 — 2026-11-03
 
 ### Added
 
 - reStructuredText (`lang-rst`: `.rst`), its grammar re-exported
-  (`tree_sitter_rst`), via the MIT-licensed `tree-sitter-rst-next` crate, a
-  maintained successor to `tree-sitter-rst` that reads documents as
-  docutils does.
-  Grouped under `all-data-languages` (and so off by default, and not
-  recursively discovered) alongside Markdown. A new `SlocMode::Rst` strips
-  `..` explicit-markup comment lines — an approximation, since `..` also opens
-  directives and targets. Wired for moldy's `.rst` formatting support.
+  (`tree_sitter_rst`), via the MIT-licensed `tree-sitter-rst-next` crate
+  (0.3), a maintained successor to `tree-sitter-rst` that reads documents as
+  docutils does. Off by default: it is in `all-data-languages`, not
+  `all-languages`, so a default build neither parses nor discovers `.rst`.
+- `SlocMode::Rst`, the SLOC mode of `.rst` files. It strips `..`
+  explicit-markup comment lines, an approximation, since `..` also opens
+  directives and targets. `SlocMode` is not `#[non_exhaustive]`, so a
+  `match` on it that lists every variant needs an arm for `Rst`.
+
+### Changed
+
+- `all-data-languages` now includes `lang-rst`. A consumer that enables it
+  gets `.rst` support too: `language_for_file`, `language_info_for_file` and
+  `is_discoverable_file` recognize `.rst` files, so a consumer that
+  discovers files from `languages()` with that feature on starts picking up
+  `.rst` files.
 
 ## 0.14.0 — 2026-10-26
 
