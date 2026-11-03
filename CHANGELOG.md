@@ -25,6 +25,11 @@ releases are recorded only in the git tags and history.
   its reason: the `#else` of `#ifdef F` with F defined stays
   `AlwaysDefined` even after an `#elif 1`. A consumer gets more dead
   lines, never fewer.
+- `dead_code_ranges` and `dead_code_ranges_with_assumptions` now report a
+  reached `#elif 0` arm as dead, with `DeadCodeReason::IfZero`, as they do
+  the first arm of `#if 0`. The arms around it keep their own reasons: the
+  `#else` of `#ifdef F ... #elif 0 ... #else`, with F defined, is still
+  `AlwaysDefined`. A `#define` inside such an arm does not count.
 
 ## 0.16.0 — 2026-11-03
 
