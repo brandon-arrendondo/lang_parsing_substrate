@@ -15,9 +15,11 @@ releases are recorded only in the git tags and history.
   `#else`, the branch a POSIX build compiles, reported dead. Now the
   definition holds inside that branch only, and after its `#endif` the
   name is undecided unless every branch that may compile agrees. A
-  definition in a branch proven taken, or in both branches of an
-  `#if`/`#else`, still counts, as does one inside a file-wide guard for the
-  code inside the guard.
+  definition in a branch proven taken (including the first branch of
+  `#if 1`), or in both branches of an `#if`/`#else`, still counts, as does
+  one inside a file-wide guard for the code inside the guard. A default
+  value (`#ifndef X` / `#define X 1` / `#endif`) still leaves X defined,
+  since the build that skips it had X defined already.
 - A commented-out `#define NAME` no longer marks `#ifdef NAME` dead: the
   build can still pass `-DNAME`. A `#define`, `#undef` or `#if` inside a
   multi-line `/* */` comment is no longer read as a directive either.

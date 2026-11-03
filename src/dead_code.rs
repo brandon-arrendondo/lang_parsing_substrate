@@ -55,15 +55,17 @@
 //! empty `#else` when there is none, agree on it. So a `#define` under an
 //! undecided `#ifdef _WIN32` leaves the name undecided after the `#endif`
 //! (the POSIX build never ran it), while one in both arms of an `#if`/`#else`
-//! holds. An arm this scanner has proven dead contributes nothing, and an
-//! arm proven taken (the C side of `#ifndef __cplusplus`) is the only path.
+//! holds. A conditional that tests one macro alone also tells each path
+//! about that macro: the path that skips `#ifndef X` / `#define X 1` /
+//! `#endif` had X defined already, so X is defined after it either way. An
+//! arm this scanner has proven dead contributes nothing, and an arm proven
+//! taken (the C side of `#ifndef __cplusplus`, the first arm of `#if 1`) is
+//! the only path.
 //! Directives inside comments, including multi-line `/* */` comments, are
 //! not directives.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
-#[cfg(feature = "lang-csharp")]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "lang-csharp")]
 use crate::regions::marker_text;
@@ -128,19 +130,57 @@ struct Frame {
     /// (in which case this frame's own classification is moot — everything
     /// in it is already dead).
     self_caused: bool,
-    /// The `#if` itself is proven true, so its first arm is always taken and
-    /// no path skips the conditional.
+    /// The `#if` itself is proven true (its `#else` is proven dead, or it is
+    /// a literal `#if 1`), so its first arm is the only path through the
+    /// conditional: no `#elif`/`#else` arm and no skipping path joins it.
     then_taken: bool,
     has_else: bool,
+    /// Whether an `#elif`/`#else` has been reached, so the current arm is no
+    /// longer the first.
+    left_first_arm: bool,
     /// Whether the current arm can be compiled at all, as far as this
     /// scanner knows. An arm inside a dead region writes nothing.
     arm_live: bool,
     /// Each name any arm of this conditional has written so far, with its
     /// value at the `#if` (`None`: no evidence).
     entry: HashMap<String, Option<Def>>,
-    /// For each finished live arm, the value at its end of each name in
-    /// `entry` at that time.
-    live_arms: Vec<HashMap<String, Option<Def>>>,
+    /// The names the current arm has written.
+    arm_writes: HashSet<String>,
+    /// The macro a bare `#ifdef`/`#ifndef`/`#if [!]defined(NAME)` tests, and
+    /// whether the first arm is the one where it is defined. Every later arm,
+    /// and the path that skips the conditional, has the opposite.
+    tested: Option<(String, bool)>,
+    /// What each finished live arm left behind.
+    live_arms: Vec<Arm>,
+}
+
+/// One finished, live arm of a conditional.
+struct Arm {
+    /// The value at the arm's end of each name the arm wrote.
+    writes: HashMap<String, Option<Def>>,
+    /// Whether the tested macro (if any) is defined throughout this arm.
+    tested_defined: bool,
+}
+
+impl Frame {
+    /// The value `name` has at the end of a path through this conditional
+    /// that wrote `writes` and on which the tested macro's definedness is
+    /// `tested_defined`; `before` is its value at the `#if`.
+    fn path_value(
+        &self,
+        name: &str,
+        before: Option<Def>,
+        writes: Option<&HashMap<String, Option<Def>>>,
+        tested_defined: bool,
+    ) -> Option<Def> {
+        if let Some(value) = writes.and_then(|w| w.get(name)) {
+            return *value;
+        }
+        match &self.tested {
+            Some((tested, _)) if tested == name => Some(Def::from(tested_defined)),
+            _ => before,
+        }
+    }
 }
 
 /// Assumed defined/undefined state for macros this file will never itself
@@ -295,10 +335,14 @@ impl Scan {
         self.stack.push(Frame {
             kind,
             self_caused,
-            then_taken: matches!(kind, ElseDead(_)),
+            then_taken: matches!(kind, ElseDead(_))
+                || (self.dead_start.is_none() && directive == "if" && is_one_condition(rest)),
             has_else: false,
+            left_first_arm: false,
             arm_live: self.dead_start.is_none(),
             entry: HashMap::new(),
+            arm_writes: HashSet::new(),
+            tested: tested_macro(directive, rest).map(|(n, d)| (n.to_string(), d)),
             live_arms: Vec::new(),
         });
     }
@@ -341,16 +385,20 @@ impl Scan {
             );
         }
         // A missing `#else` is an empty arm, taken whenever the condition
-        // is false: on that path every name keeps its value from the `#if`.
+        // is false: on that path every name keeps its value from the `#if`,
+        // except that a tested macro has the definedness that skipped the
+        // arm (`#ifndef X` / `#define X 1` / `#endif` leaves X defined on
+        // both paths).
         let implicit_else = !frame.has_else && !frame.then_taken;
+        let skip_defined = frame.tested.as_ref().is_some_and(|(_, first)| !first);
         for (name, before) in &frame.entry {
             let mut values: Vec<Option<Def>> = frame
                 .live_arms
                 .iter()
-                .map(|arm| arm.get(name).copied().unwrap_or(*before))
+                .map(|arm| frame.path_value(name, *before, Some(&arm.writes), arm.tested_defined))
                 .collect();
             if implicit_else {
-                values.push(*before);
+                values.push(frame.path_value(name, *before, None, skip_defined));
             }
             let after = values.into_iter().reduce(join).unwrap_or(*before);
             self.set(name, after);
@@ -364,14 +412,24 @@ impl Scan {
         let Some(frame) = self.stack.last_mut() else {
             return;
         };
-        if frame.arm_live {
-            let arm = frame
-                .entry
-                .keys()
-                .map(|name| (name.clone(), self.defined.get(name).copied()))
+        let first_arm = !frame.left_first_arm;
+        if frame.arm_live && (first_arm || !frame.then_taken) {
+            let writes = frame
+                .arm_writes
+                .drain()
+                .map(|name| {
+                    let value = self.defined.get(&name).copied();
+                    (name, value)
+                })
                 .collect();
-            frame.live_arms.push(arm);
+            let tested_defined = frame.tested.as_ref().is_some_and(|(_, d)| *d == first_arm);
+            frame.live_arms.push(Arm {
+                writes,
+                tested_defined,
+            });
         }
+        frame.arm_writes.clear();
+        frame.left_first_arm = true;
         for (name, before) in &frame.entry {
             match before {
                 Some(value) => self.defined.insert(name.clone(), *value),
@@ -389,6 +447,7 @@ impl Scan {
                     .entry
                     .insert(name.to_string(), self.defined.get(name).copied());
             }
+            frame.arm_writes.insert(name.to_string());
         }
         match value {
             Some(value) => self.defined.insert(name.to_string(), value),
@@ -521,6 +580,28 @@ fn classify_if_condition(rest: &str, defined: &HashMap<String, Def>) -> BranchKi
     }
 }
 
+/// The macro whose definedness alone decides an `#ifdef NAME`, `#ifndef
+/// NAME`, `#if defined(NAME)` or `#if !defined(NAME)`, and whether the first
+/// arm is the one where it is defined. `None` for any other condition.
+fn tested_macro<'a>(directive: &str, rest: &'a str) -> Option<(&'a str, bool)> {
+    match directive {
+        "ifdef" => first_ident(rest).map(|n| (n, true)),
+        "ifndef" => first_ident(rest).map(|n| (n, false)),
+        "if" => {
+            let trimmed = strip_trailing_comment(rest).trim();
+            let (negated, cond) = match trimmed.strip_prefix('!') {
+                Some(after) => (true, after.trim_start()),
+                None => (false, trimmed),
+            };
+            match parse_defined(cond) {
+                Some((name, after)) if after.trim().is_empty() => Some((name, !negated)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Parses a leading `defined(NAME)` or `defined NAME` off `s`, returning the
 /// name and whatever text follows it.
 fn parse_defined(s: &str) -> Option<(&str, &str)> {
@@ -538,6 +619,16 @@ fn parse_defined(s: &str) -> Option<(&str, &str)> {
         let name = first_ident(rest)?;
         Some((name, &rest[name.len()..]))
     }
+}
+
+/// `#if 1`: used only to know that its first arm is always taken. Its
+/// `#elif`/`#else` arms are not reported dead.
+fn is_one_condition(rest: &str) -> bool {
+    let stripped: String = strip_trailing_comment(rest)
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
+        .collect();
+    stripped == "1"
 }
 
 fn is_zero_condition(rest: &str) -> bool {
@@ -955,6 +1046,80 @@ mod tests {
             vec![
                 (7, 7, DeadCodeReason::AlwaysDefined),
                 (10, 10, DeadCodeReason::AlwaysDefined),
+            ]
+        );
+    }
+
+    /// The `#else` of `#ifdef FAST ... #else ... #endif` after `default`.
+    fn else_of_fast_after(default: &str) -> Vec<(usize, usize, DeadCodeReason)> {
+        let src = format!("{default}#ifdef FAST\nfast();\n#else\nslow();\n#endif\n");
+        let slow = default.lines().count() + 4;
+        let got = ranges(&src);
+        assert!(
+            got.iter().all(|&(a, b, _)| a <= slow && slow <= b) || got.is_empty(),
+            "{default}: {got:?}"
+        );
+        got.into_iter().filter(|&(a, _, _)| a == slow).collect()
+    }
+
+    #[test]
+    fn default_value_guard_leaves_the_macro_defined_on_every_path() {
+        for default in [
+            "#ifndef FAST\n#define FAST 1\n#endif\n",
+            "#if !defined(FAST)\n#define FAST\n#endif\n",
+            "#if ! defined FAST /* default */\n#define FAST 1\n#endif\n",
+            "#ifndef FAST\n#define FAST 1\n#else\n#endif\n",
+            "#ifdef FAST\n#else\n#define FAST 1\n#endif\n",
+            "#ifdef WIN\n#define FAST 1\n#endif\n#ifndef FAST\n#define FAST 1\n#endif\n",
+            "#if 0\n#else\n#ifndef FAST\n#define FAST 1\n#endif\n#endif\n",
+            "#ifndef FAST\n#if 1\n#define FAST 1\n#endif\n#endif\n",
+            "#if 1\n#ifndef FAST\n#define FAST 1\n#endif\n#elif defined(WIN)\n#define W 1\n#endif\n",
+            "#ifndef __cplusplus\n#define FAST 1\n#elif defined(X)\n#undef FAST\n#endif\n",
+            "#ifndef FAST\n#define FAST 1\n#endif\n#ifdef WIN\n#undef FAST\n#define FAST 2\n#endif\n",
+        ] {
+            let slow = default.lines().count() + 4;
+            assert_eq!(
+                else_of_fast_after(default),
+                vec![(slow, slow, DeadCodeReason::AlwaysDefined)],
+                "{default}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_guard_that_does_not_always_define_the_macro_proves_nothing() {
+        for default in [
+            // Defined only under an unrelated undecided macro.
+            "#ifndef OTHER\n#define FAST 1\n#endif\n",
+            // A default that a platform then removes.
+            "#ifndef FAST\n#define FAST 1\n#endif\n#ifdef WIN\n#undef FAST\n#endif\n",
+            // Defined in the arm where it already was, absent in the other.
+            "#ifdef FAST\n#define FAST 2\n#else\n#endif\n#ifdef WIN\n#undef FAST\n#endif\n",
+            // `#elif`: the default holds only in one arm.
+            "#ifndef FAST\n#elif defined(X)\n#undef FAST\n#endif\n",
+        ] {
+            assert!(else_of_fast_after(default).is_empty(), "{default}");
+        }
+    }
+
+    #[test]
+    fn the_else_of_if_1_is_not_reported_dead() {
+        assert!(ranges("#if 1\na();\n#else\nb();\n#endif\n").is_empty());
+    }
+
+    #[test]
+    fn a_tested_macro_nobody_writes_keeps_its_assumption() {
+        // `#ifdef _MSC_VER ... #else ... #endif` writes nothing, so the
+        // caller's assumption about _MSC_VER still decides a later test.
+        let src = "#ifdef _MSC_VER\nx();\n#else\ny();\n#endif\n\
+                   #ifdef _MSC_VER\nwin();\n#endif\n";
+        let mut assumed = PlatformAssumptions::new();
+        assumed.insert("_MSC_VER".to_string(), false);
+        assert_eq!(
+            ranges_with(src, &assumed),
+            vec![
+                (2, 2, DeadCodeReason::NeverDefined),
+                (7, 7, DeadCodeReason::NeverDefined),
             ]
         );
     }
