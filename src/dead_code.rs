@@ -253,12 +253,12 @@ fn dead_code_ranges_impl(
             .unwrap_or_default(),
         ..Scan::default()
     };
-    let mut in_block_comment = false;
+    let mut lex = Lex::Code;
     let mut total_lines = 0;
 
     for (idx, raw) in source.lines().enumerate() {
         total_lines = idx + 1;
-        let line = strip_comments(raw, &mut in_block_comment);
+        let line = strip_comments(raw, &mut lex);
         if let Some((directive, rest)) = parse_directive(&line) {
             scan.directive(idx + 1, directive, rest);
         }
@@ -390,37 +390,76 @@ impl Scan {
         // arm (`#ifndef X` / `#define X 1` / `#endif` leaves X defined on
         // both paths).
         let implicit_else = !frame.has_else && !frame.then_taken;
-        let skip_defined = frame.tested.as_ref().is_some_and(|(_, first)| !first);
-        for (name, before) in &frame.entry {
+        let paths = frame.live_arms.len() + usize::from(implicit_else);
+        let tested = frame.tested.as_ref().map(|(name, _)| name.as_str());
+        // Join each written name over the paths that wrote it, then with its
+        // value at the `#if` if some path did not. Linear in the writes, so
+        // a long `#elif` chain stays cheap.
+        let mut joined: HashMap<&str, (Option<Def>, usize)> = HashMap::new();
+        for arm in &frame.live_arms {
+            for (name, value) in &arm.writes {
+                if Some(name.as_str()) == tested {
+                    continue;
+                }
+                joined
+                    .entry(name)
+                    .and_modify(|(acc, n)| {
+                        *acc = join(*acc, *value);
+                        *n += 1;
+                    })
+                    .or_insert((*value, 1));
+            }
+        }
+        let mut after: Vec<(String, Option<Def>)> = joined
+            .into_iter()
+            .map(|(name, (value, n))| {
+                let before = frame.entry.get(name).copied().flatten();
+                let value = if n < paths {
+                    join(value, before)
+                } else {
+                    value
+                };
+                (name.to_string(), value)
+            })
+            .collect();
+        // The tested macro: a path that did not write it still knows its
+        // definedness from the test (`#ifndef X` / `#define X 1` / `#endif`
+        // leaves X defined on both paths).
+        if let Some(name) = tested.filter(|n| frame.entry.contains_key(*n)) {
+            let before = frame.entry[name];
+            let skip_defined = frame.tested.as_ref().is_some_and(|(_, first)| !first);
             let mut values: Vec<Option<Def>> = frame
                 .live_arms
                 .iter()
-                .map(|arm| frame.path_value(name, *before, Some(&arm.writes), arm.tested_defined))
+                .map(|arm| frame.path_value(name, before, Some(&arm.writes), arm.tested_defined))
                 .collect();
             if implicit_else {
-                values.push(frame.path_value(name, *before, None, skip_defined));
+                values.push(frame.path_value(name, before, None, skip_defined));
             }
-            let after = values.into_iter().reduce(join).unwrap_or(*before);
-            self.set(name, after);
+            after.push((
+                name.to_string(),
+                values.into_iter().reduce(join).unwrap_or(before),
+            ));
+        }
+        for (name, value) in after {
+            self.set(&name, value);
         }
     }
 
     /// Records the current arm's writes (if it can be compiled at all) and
-    /// rewinds every name the conditional has written to its value at the
+    /// rewinds every name it wrote to its value at the
     /// `#if`, so the next arm starts where the conditional did.
     fn end_arm(&mut self) {
         let Some(frame) = self.stack.last_mut() else {
             return;
         };
         let first_arm = !frame.left_first_arm;
+        frame.left_first_arm = true;
+        let written: Vec<String> = frame.arm_writes.drain().collect();
         if frame.arm_live && (first_arm || !frame.then_taken) {
-            let writes = frame
-                .arm_writes
-                .drain()
-                .map(|name| {
-                    let value = self.defined.get(&name).copied();
-                    (name, value)
-                })
+            let writes = written
+                .iter()
+                .map(|name| (name.clone(), self.defined.get(name).copied()))
                 .collect();
             let tested_defined = frame.tested.as_ref().is_some_and(|(_, d)| *d == first_arm);
             frame.live_arms.push(Arm {
@@ -428,12 +467,12 @@ impl Scan {
                 tested_defined,
             });
         }
-        frame.arm_writes.clear();
-        frame.left_first_arm = true;
-        for (name, before) in &frame.entry {
-            match before {
-                Some(value) => self.defined.insert(name.clone(), *value),
-                None => self.defined.remove(name),
+        // Only this arm's writes can differ from the `#if`'s values: every
+        // arm starts from them.
+        for name in written {
+            match frame.entry.get(&name).copied().flatten() {
+                Some(value) => self.defined.insert(name, value),
+                None => self.defined.remove(&name),
             };
         }
     }
@@ -569,7 +608,11 @@ fn classify_if_condition(rest: &str, defined: &HashMap<String, Def>) -> BranchKi
             let kind = classify_name(name, false, defined);
             let remainder = remainder.trim_start();
             let bare = remainder.is_empty();
-            let leading_and = remainder.starts_with("&&") && matches!(kind, ThenDead(_));
+            // `defined(X) && ...` is false whenever X is undefined, unless an
+            // `||` lets the rest be true on its own.
+            let leading_and = remainder.starts_with("&&")
+                && !remainder.contains("||")
+                && matches!(kind, ThenDead(_));
             if bare || leading_and {
                 kind
             } else {
@@ -662,55 +705,144 @@ fn first_ident(s: &str) -> Option<&str> {
     }
 }
 
-/// Removes the comments from one line of C source, replacing each with a
-/// space as the preprocessor does. `in_block` carries an unterminated
-/// `/* */` from one line to the next, so a line wholly inside a block
-/// comment comes back blank and a `#define` or `#if` written in a comment is
-/// never read as a directive. String and character literals are skipped, so
-/// the `/*` in `"/*"` opens nothing.
-fn strip_comments<'a>(line: &'a str, in_block: &mut bool) -> Cow<'a, str> {
-    if !*in_block && !line.contains("/*") && !line.contains("//") {
+/// Where a line starts, lexically, given the lines before it.
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
+enum Lex {
+    #[default]
+    Code,
+    /// Inside a `/* */` comment.
+    Block,
+    /// A `//` comment continued onto this line by a trailing backslash.
+    LineComment,
+    /// A string or character literal (its quote) continued onto this line
+    /// by a trailing backslash.
+    Quote(u8),
+    /// A C++ raw string `R"delim( ... )delim"`, closed by `)delim"`.
+    Raw(String),
+}
+
+/// Removes the comments from one line of C or C++ source, replacing each
+/// with a space as the preprocessor does. `state` carries a comment or
+/// literal left open at the end of one line into the next, so text wholly
+/// inside a block comment, a raw string or a backslash-continued literal
+/// comes back blank, and a `#define` or `#if` written inside one is never
+/// read as a directive. Literals that open on this line are kept as written,
+/// and the `/*` in `"/*"` opens nothing.
+fn strip_comments<'a>(line: &'a str, state: &mut Lex) -> Cow<'a, str> {
+    if *state == Lex::Code && !line.contains(['/', '"', '\'']) {
         return Cow::Borrowed(line);
     }
     let bytes = line.as_bytes();
+    let continued = line.ends_with('\\');
     let mut out = String::with_capacity(line.len());
-    // Start of the text not yet copied (or skipped, inside a comment). Every
-    // index it takes sits next to an ASCII byte, so it is a char boundary.
-    let mut keep_from = 0;
-    let mut quote: Option<u8> = None;
+    // A literal carried in from an earlier line is blanked up to its close.
+    let mut carried = matches!(state, Lex::Quote(_) | Lex::Raw(_));
+    // Start of the text not yet copied (or skipped). Every index it takes
+    // sits next to an ASCII byte, so it is a char boundary.
+    let mut keep_from = if carried || *state != Lex::Code {
+        line.len()
+    } else {
+        0
+    };
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
         let next = bytes.get(i + 1).copied();
-        if *in_block {
-            if c == b'*' && next == Some(b'/') {
-                *in_block = false;
-                keep_from = i + 2;
-                i += 1;
+        match state {
+            Lex::LineComment => break,
+            Lex::Block => {
+                if c == b'*' && next == Some(b'/') {
+                    *state = Lex::Code;
+                    out.push(' ');
+                    keep_from = i + 2;
+                    i += 1;
+                }
             }
-        } else if let Some(q) = quote {
-            if c == b'\\' {
-                i += 1;
-            } else if c == q {
-                quote = None;
+            Lex::Quote(q) => {
+                if c == b'\\' {
+                    i += 1;
+                } else if c == *q {
+                    *state = Lex::Code;
+                    if carried {
+                        carried = false;
+                        out.push(' ');
+                        keep_from = i + 1;
+                    }
+                }
             }
-        } else if c == b'"' || c == b'\'' {
-            quote = Some(c);
-        } else if c == b'/' && (next == Some(b'/') || next == Some(b'*')) {
-            out.push_str(&line[keep_from..i]);
-            out.push(' ');
-            if next == Some(b'/') {
-                return Cow::Owned(out);
+            Lex::Raw(delim) => {
+                let close = i + 1 + delim.len();
+                if c == b')'
+                    && line.get(i + 1..close) == Some(delim.as_str())
+                    && bytes.get(close) == Some(&b'"')
+                {
+                    *state = Lex::Code;
+                    if carried {
+                        carried = false;
+                        out.push(' ');
+                        keep_from = close + 1;
+                    }
+                    i = close;
+                }
             }
-            *in_block = true;
-            i += 1;
+            Lex::Code => {
+                if c == b'"' {
+                    *state = match raw_string_delimiter(line, i) {
+                        Some((delim, open)) => {
+                            i = open;
+                            Lex::Raw(delim.to_string())
+                        }
+                        None => Lex::Quote(c),
+                    };
+                } else if c == b'\'' && !(i > 0 && bytes[i - 1].is_ascii_digit()) {
+                    // (A `'` after a digit is a C23/C++14 digit separator.)
+                    *state = Lex::Quote(c);
+                } else if c == b'/' && (next == Some(b'/') || next == Some(b'*')) {
+                    out.push_str(&line[keep_from..i]);
+                    out.push(' ');
+                    keep_from = line.len();
+                    *state = if next == Some(b'/') {
+                        Lex::LineComment
+                    } else {
+                        Lex::Block
+                    };
+                    i += 1;
+                }
+            }
         }
         i += 1;
     }
-    if !*in_block {
-        out.push_str(&line[keep_from.min(line.len())..]);
+    if keep_from < line.len() && !carried {
+        out.push_str(&line[keep_from..]);
+    }
+    // A literal or `//` comment ends with its line unless a backslash
+    // splices the next line on; a block comment or raw string does not.
+    if matches!(state, Lex::LineComment | Lex::Quote(_)) && !continued {
+        *state = Lex::Code;
     }
     Cow::Owned(out)
+}
+
+/// If the `"` at `quote` opens a C++ raw string (`R"`, `LR"`, `uR"`, `UR"`
+/// or `u8R"`, then a delimiter of at most 16 characters and `(`), returns
+/// the delimiter and the index of that `(`.
+fn raw_string_delimiter(line: &str, quote: usize) -> Option<(&str, usize)> {
+    let bytes = line.as_bytes();
+    let mut start = quote;
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+    if !matches!(&line[start..quote], "R" | "LR" | "uR" | "UR" | "u8R") {
+        return None;
+    }
+    let rest = &line[quote + 1..];
+    let open = rest.find('(')?;
+    let delim = &rest[..open];
+    let valid = delim.len() <= 16
+        && delim
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !matches!(b, b'(' | b')' | b'\\' | b'"'));
+    valid.then_some((delim, quote + 1 + open))
 }
 
 /// Splits `line` into a leading `#`-directive keyword and the rest of the
@@ -1100,6 +1232,93 @@ mod tests {
         ] {
             assert!(else_of_fast_after(default).is_empty(), "{default}");
         }
+    }
+
+    #[test]
+    fn a_quote_inside_a_raw_string_does_not_open_a_comment() {
+        let src = concat!(
+            "#ifdef __cplusplus\n",                  // 1
+            "const char *r = R\"x(a \" /* b)x\";\n", // 2
+            "#endif\n",                              // 3
+            "int live(void);\n",                     // 4
+            "#if 0\n",                               // 5
+            "dead();\n",                             // 6
+            "#endif\n",                              // 7
+        );
+        assert_eq!(
+            ranges(src),
+            vec![
+                (2, 2, DeadCodeReason::CppOnly),
+                (6, 6, DeadCodeReason::IfZero)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_continued_string_does_not_open_a_comment_on_its_next_line() {
+        let src = concat!(
+            "#ifdef __cplusplus\n",     // 1
+            "const char *s = \"a \\\n", // 2
+            "/* b\";\n",                // 3
+            "#endif\n",                 // 4
+            "int live(void);\n",        // 5
+        );
+        assert_eq!(ranges(src), vec![(2, 3, DeadCodeReason::CppOnly)]);
+    }
+
+    #[test]
+    fn a_define_inside_a_multi_line_raw_string_is_not_a_directive() {
+        let src = concat!(
+            "const char *r = R\"sql(\n", // 1
+            "#define FOO\n",             // 2
+            "#if 0\n",                   // 3
+            ")sql\";\n",                 // 4
+            "#ifdef FOO\n",              // 5
+            "maybe();\n",                // 6
+            "#else\n",                   // 7
+            "maybe_too();\n",            // 8
+            "#endif\n",                  // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn a_define_inside_a_continued_string_is_not_a_directive() {
+        let src = "const char *s = \"a \\\n#define FOO\";\n\
+                   #ifdef FOO\nmaybe();\n#else\nmaybe_too();\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn a_continued_line_comment_hides_the_next_line() {
+        let src = "// note \\\n#define FOO\n#ifdef FOO\nmaybe();\n#else\nmaybe_too();\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn a_digit_separator_does_not_open_a_char_literal() {
+        let src = "int n = 1'000; /* c */\n#define FOO\n#ifndef FOO\ndead();\n#endif\n";
+        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    #[test]
+    fn defined_and_rest_with_an_or_decides_nothing() {
+        let src = "#define A\n#undef A\n#if defined(A) && B || C\nmaybe();\n#endif\n";
+        assert!(ranges(src).is_empty());
+        let and_only = "#define A\n#undef A\n#if defined(A) && B\ndead();\n#endif\n";
+        assert_eq!(ranges(and_only), vec![(4, 4, DeadCodeReason::NeverDefined)]);
+    }
+
+    #[test]
+    fn a_long_elif_chain_of_distinct_defines_joins_to_undecided() {
+        let mut src = String::from("#if A0\n#define X0\n");
+        for i in 1..5000 {
+            src.push_str(&format!("#elif A{i}\n#define X{i}\n"));
+        }
+        src.push_str("#endif\n#ifdef X4999\nmaybe();\n#endif\n#ifndef X0\nmaybe_too();\n#endif\n");
+        let start = std::time::Instant::now();
+        assert!(ranges(&src).is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

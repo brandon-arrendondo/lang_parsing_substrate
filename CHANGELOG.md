@@ -20,9 +20,21 @@ releases are recorded only in the git tags and history.
   one inside a file-wide guard for the code inside the guard. A default
   value (`#ifndef X` / `#define X 1` / `#endif`) still leaves X defined,
   since the build that skips it had X defined already.
-- A commented-out `#define NAME` no longer marks `#ifdef NAME` dead: the
-  build can still pass `-DNAME`. A `#define`, `#undef` or `#if` inside a
-  multi-line `/* */` comment is no longer read as a directive either.
+- Under `dead_code_ranges_with_assumptions`, a name that this file writes
+  only in a branch the scanner can't decide is now undecided, and that
+  overrides the caller's `PlatformAssumptions` entry for it. With
+  `_MSC_VER` assumed undefined, `#ifdef CONFIG_X` / `#define _MSC_VER 1900`
+  / `#endif` leaves a later `#ifdef _MSC_VER` branch live where it used to
+  be dead.
+- `#if defined(X) && A || B`, with X undefined, is no longer reported dead:
+  the `||` lets `B` alone compile it. `defined(X) && ...` still decides
+  when nothing after it has an `||`.
+- For C and C++, a commented-out `#define NAME` no longer marks
+  `#ifdef NAME` dead: the build can still pass `-DNAME`. (The C# scanner,
+  `csharp_dead_code_regions`, is unchanged.) A `#define`, `#undef` or `#if`
+  inside a multi-line `/* */` comment, a C++ raw string
+  (`R"delim(...)delim"`), or a string or `//` comment continued by a
+  trailing backslash is no longer read as a directive either.
 
 ## 0.15.0 — 2026-11-03
 
