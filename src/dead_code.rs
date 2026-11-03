@@ -247,6 +247,21 @@ fn dead_code_ranges_impl(
     source: &str,
     assumed: Option<&PlatformAssumptions>,
 ) -> Vec<DeadCodeRegion> {
+    // This scanner doesn't know whether the file is C or C++, and a raw
+    // string can be misread (`#define R "x"` then `R"(";` in C, or
+    // ill-formed source). One still open at end of file has hidden
+    // everything after it, so read the file again without raw strings.
+    scan_lines(source, assumed, true)
+        .unwrap_or_else(|| scan_lines(source, assumed, false).unwrap_or_default())
+}
+
+/// One pass over `source`. `None` when `raw_strings` is on and a raw string
+/// is still open at end of file.
+fn scan_lines(
+    source: &str,
+    assumed: Option<&PlatformAssumptions>,
+    raw_strings: bool,
+) -> Option<Vec<DeadCodeRegion>> {
     let mut scan = Scan {
         defined: assumed
             .map(|a| a.iter().map(|(k, &v)| (k.clone(), Def::from(v))).collect())
@@ -258,13 +273,16 @@ fn dead_code_ranges_impl(
 
     for (idx, raw) in source.lines().enumerate() {
         total_lines = idx + 1;
-        let line = strip_comments(raw, &mut lex);
+        let line = strip_comments(raw, &mut lex, raw_strings);
         if let Some((directive, rest)) = parse_directive(&line) {
             scan.directive(idx + 1, directive, rest);
         }
     }
 
-    scan.finish(total_lines)
+    if matches!(lex, Lex::Raw(_)) {
+        return None;
+    }
+    Some(scan.finish(total_lines))
 }
 
 /// What this file proves about one macro name at a point in the scan.
@@ -727,8 +745,9 @@ enum Lex {
 /// inside a block comment, a raw string or a backslash-continued literal
 /// comes back blank, and a `#define` or `#if` written inside one is never
 /// read as a directive. Literals that open on this line are kept as written,
-/// and the `/*` in `"/*"` opens nothing.
-fn strip_comments<'a>(line: &'a str, state: &mut Lex) -> Cow<'a, str> {
+/// and the `/*` in `"/*"` opens nothing. With `raw_strings` off, `R"` opens
+/// an ordinary string.
+fn strip_comments<'a>(line: &'a str, state: &mut Lex, raw_strings: bool) -> Cow<'a, str> {
     if *state == Lex::Code && !line.contains(['/', '"', '\'']) {
         return Cow::Borrowed(line);
     }
@@ -787,15 +806,16 @@ fn strip_comments<'a>(line: &'a str, state: &mut Lex) -> Cow<'a, str> {
             }
             Lex::Code => {
                 if c == b'"' {
-                    *state = match raw_string_delimiter(line, i) {
+                    let raw = raw_strings.then(|| raw_string_delimiter(line, i)).flatten();
+                    *state = match raw {
                         Some((delim, open)) => {
                             i = open;
                             Lex::Raw(delim.to_string())
                         }
                         None => Lex::Quote(c),
                     };
-                } else if c == b'\'' && !(i > 0 && bytes[i - 1].is_ascii_digit()) {
-                    // (A `'` after a digit is a C23/C++14 digit separator.)
+                } else if c == b'\'' && !follows_a_number(bytes, i) {
+                    // (A `'` inside a number is a C23/C++14 digit separator.)
                     *state = Lex::Quote(c);
                 } else if c == b'/' && (next == Some(b'/') || next == Some(b'*')) {
                     out.push_str(&line[keep_from..i]);
@@ -823,9 +843,22 @@ fn strip_comments<'a>(line: &'a str, state: &mut Lex) -> Cow<'a, str> {
     Cow::Owned(out)
 }
 
+/// Whether the `'` at `at` continues a number (`1'000`, `0xFF'FF`): the token
+/// before it starts with a digit. After an identifier such as the `u8` of
+/// `u8'a'`, it opens a character literal.
+fn follows_a_number(bytes: &[u8], at: usize) -> bool {
+    let mut start = at;
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+    start < at && bytes[start].is_ascii_digit()
+}
+
 /// If the `"` at `quote` opens a C++ raw string (`R"`, `LR"`, `uR"`, `UR"`
-/// or `u8R"`, then a delimiter of at most 16 characters and `(`), returns
-/// the delimiter and the index of that `(`.
+/// or `u8R"`, then a delimiter and `(`), returns the delimiter and the
+/// index of that `(`. A delimiter longer than the standard's 16 characters
+/// is ill-formed but still read as one: reading it as an ordinary string
+/// would let a `"` inside end it early.
 fn raw_string_delimiter(line: &str, quote: usize) -> Option<(&str, usize)> {
     let bytes = line.as_bytes();
     let mut start = quote;
@@ -838,10 +871,9 @@ fn raw_string_delimiter(line: &str, quote: usize) -> Option<(&str, usize)> {
     let rest = &line[quote + 1..];
     let open = rest.find('(')?;
     let delim = &rest[..open];
-    let valid = delim.len() <= 16
-        && delim
-            .bytes()
-            .all(|b| b.is_ascii_graphic() && !matches!(b, b'(' | b')' | b'\\' | b'"'));
+    let valid = delim
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && !matches!(b, b'(' | b')' | b'\\' | b'"'));
     valid.then_some((delim, quote + 1 + open))
 }
 
@@ -1319,6 +1351,55 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(ranges(&src).is_empty());
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_u8_char_literal_is_not_a_digit_separator() {
+        let src = concat!(
+            "#if 0\n",                                        // 1
+            "char a[] = {u8'\"'}; const char *s = \"/*\";\n", // 2
+            "#endif\n",                                       // 3
+            "int LIVE;\n",                                    // 4
+        );
+        assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn a_hex_digit_separator_is_still_a_separator() {
+        let src = "int n = 0xFF'FF; /* c */\n#define FOO\n#ifndef FOO\ndead();\n#endif\n";
+        assert_eq!(ranges(src), vec![(4, 4, DeadCodeReason::AlwaysDefined)]);
+    }
+
+    #[test]
+    fn an_overlong_raw_string_delimiter_is_still_a_raw_string() {
+        let src = concat!(
+            "#if 0\n",                                                     // 1
+            "auto r = R\"abcdefghijklmnopq(\" /* )abcdefghijklmnopq\";\n", // 2
+            "#endif\n",                                                    // 3
+            "int LIVE;\n",                                                 // 4
+        );
+        assert_eq!(ranges(src), vec![(2, 2, DeadCodeReason::IfZero)]);
+    }
+
+    #[test]
+    fn a_raw_string_open_at_end_of_file_is_read_again_as_plain_strings() {
+        // In C, `R"(";` is the macro R followed by a string, not a raw string.
+        let in_if_zero = concat!(
+            "#define R \"x\"\n", // 1
+            "#if 0\n",           // 2
+            "R\"(\";\n",         // 3
+            "#endif\n",          // 4
+            "int LIVE;\n",       // 5
+        );
+        assert_eq!(ranges(in_if_zero), vec![(3, 3, DeadCodeReason::IfZero)]);
+        let outside = concat!(
+            "#define R \"x\"\n",         // 1
+            "const char *s = R\"(\";\n", // 2
+            "#if 0\n",                   // 3
+            "dead();\n",                 // 4
+            "#endif\n",                  // 5
+        );
+        assert_eq!(ranges(outside), vec![(4, 4, DeadCodeReason::IfZero)]);
     }
 
     #[test]
