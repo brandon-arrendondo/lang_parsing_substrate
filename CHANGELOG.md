@@ -5,13 +5,15 @@ releases are recorded only in the git tags and history.
 
 ## Unreleased
 
+## 0.17.0 — 2026-11-03
+
 ### Fixed
 
 - `csharp_dead_code_regions` no longer marks `#if FOO` dead because the file
   has a commented-out `#define FOO` (`// #define FOO`, `/* #define FOO */`):
   the build can still define the symbol with `-define:` or
   `DefineConstants`. This is the rule C and C++ follow since 0.16.0. A
-  real `#define` or `#undef` at the top of the file still decides.
+  real `#define` or `#undef` still decides.
 - `csharp_dead_code_regions` no longer ignores a `#define` or `#undef`
   inside an `#if` branch. After `#define FOO`, `#if X`, `#undef FOO`,
   `#endif`, it kept FOO defined and marked dead the `#else` of a later
@@ -24,8 +26,6 @@ releases are recorded only in the git tags and history.
 - `csharp_dead_code_regions` no longer stretches a dead branch that ends
   in a `#define` or `#undef` over the branch after it, or over the
   `#endif` line, and now finds a dead `#else` that holds only a directive.
-  tree-sitter-c-sharp can attach such a directive to the wrong branch, so
-  the scanner now assigns each branch's content by line.
 
 ### Changed
 
