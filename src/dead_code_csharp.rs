@@ -40,7 +40,7 @@
 //! short-circuit evaluation falls out for free: `false && SYMBOL` is
 //! provably dead even though `SYMBOL` alone isn't classifiable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Node, Parser};
 
@@ -70,15 +70,57 @@ pub fn csharp_dead_code_regions(source: &[u8]) -> Vec<CSharpDeadCodeRegion> {
         return Vec::new();
     };
 
-    let mut defined = Symbols::new();
+    let mut defined = Symbols::default();
     let mut regions = Vec::new();
     walk(tree.root_node(), source, &mut defined, &mut regions);
     regions
 }
 
-/// What the file itself proves about each symbol at one point: `true`
-/// defined, `false` undefined. A symbol with no entry has no evidence.
-type Symbols = HashMap<String, bool>;
+/// What the file itself proves about each symbol at the current point of
+/// the walk, `true` defined and `false` undefined (no entry: no evidence),
+/// with an undo log so a branch can be walked in place and rolled back.
+#[derive(Default)]
+struct Symbols {
+    values: HashMap<String, bool>,
+    /// Each write since the start, with the value it replaced.
+    log: Vec<(String, Option<bool>)>,
+}
+
+impl Symbols {
+    fn get(&self, name: &str) -> Option<bool> {
+        self.values.get(name).copied()
+    }
+
+    /// Sets `name` (`None`: no evidence), logging the value it replaces.
+    fn set(&mut self, name: &str, value: Option<bool>) {
+        let old = match value {
+            Some(v) => self.values.insert(name.to_string(), v),
+            None => self.values.remove(name),
+        };
+        self.log.push((name.to_string(), old));
+    }
+
+    /// The value at this point of each name written since `mark`.
+    fn written_since(&self, mark: usize) -> HashMap<String, Option<bool>> {
+        let mut writes = HashMap::new();
+        for (name, _) in &self.log[mark..] {
+            if !writes.contains_key(name) {
+                writes.insert(name.clone(), self.get(name));
+            }
+        }
+        writes
+    }
+
+    /// Undoes every write since `mark`.
+    fn rollback(&mut self, mark: usize) {
+        for (name, old) in self.log.drain(mark..).rev() {
+            match old {
+                Some(v) => self.values.insert(name, v),
+                None => self.values.remove(&name),
+            };
+        }
+    }
+}
 
 /// Recurses through `node`'s named children in document order. A dead
 /// branch is never recursed into at all, so a `#define`/`#undef` reached
@@ -105,7 +147,7 @@ fn walk_siblings(
         match child.kind() {
             "preproc_define" | "preproc_undef" => {
                 if let Some(name) = preproc_arg_name(*child, source) {
-                    defined.insert(name, child.kind() == "preproc_define");
+                    defined.set(&name, Some(child.kind() == "preproc_define"));
                 }
             }
             "preproc_if" => walk_chain(*child, source, defined, out),
@@ -134,15 +176,16 @@ fn walk_chain(
     // condition.
     let mut chain_resolved_true = false;
     let mut has_else = false;
-    // What each branch that may compile leaves behind at `#endif`.
-    let mut paths: Vec<Symbols> = Vec::new();
+    // What each branch that may compile wrote, with each name's value at
+    // `#endif` on that path.
+    let mut paths: Vec<HashMap<String, Option<bool>>> = Vec::new();
     let branches = chain_branches(node);
     let mut first = true;
 
     for (condition, body) in branches {
         has_else |= condition.is_none();
         // Every condition is evaluated against the chain's entry state: an
-        // earlier branch's writes are not on this branch's path.
+        // earlier branch's writes were rolled back.
         let live = !chain_resolved_true
             && match condition.map(|cond| eval_condition(cond, source, defined)) {
                 Some(Some(false)) => false,
@@ -153,9 +196,13 @@ fn walk_chain(
                 Some(None) | None => true,
             };
         if live {
-            let mut state = with_tested(defined, tested.as_ref(), first);
-            walk_siblings(&body, source, &mut state, out);
-            paths.push(state);
+            let mark = defined.log.len();
+            if let Some((name, value_in_first)) = &tested {
+                defined.set(name, Some(*value_in_first == first));
+            }
+            walk_siblings(&body, source, defined, out);
+            paths.push(defined.written_since(mark));
+            defined.rollback(mark);
         } else {
             push_dead_range(&body, out);
         }
@@ -165,25 +212,45 @@ fn walk_chain(
     // A missing `#else` is an empty branch, taken whenever every condition
     // is false; no path skips a chain with a proven-true branch.
     if !has_else && !chain_resolved_true {
-        paths.push(with_tested(defined, tested.as_ref(), false));
+        let skip = tested
+            .iter()
+            .map(|(name, value_in_first)| (name.clone(), Some(!value_in_first)));
+        paths.push(skip.collect());
     }
-    if let Some(joined) = paths.into_iter().reduce(|mut acc, path| {
-        acc.retain(|name, value| path.get(name) == Some(value));
-        acc
-    }) {
-        *defined = joined;
+    // Join each written name over the paths that wrote it, then with its
+    // entry value if some path did not: a name keeps a value only if every
+    // path agrees. Linear in the writes, so a long `#elif` chain stays cheap.
+    let total = paths.len();
+    let mut joined: HashMap<String, (Option<bool>, usize)> = HashMap::new();
+    for (name, value) in paths.into_iter().flatten() {
+        joined
+            .entry(name)
+            .and_modify(|(acc, n)| {
+                *acc = agree(*acc, value);
+                *n += 1;
+            })
+            .or_insert((value, 1));
+    }
+    for (name, (value, n)) in joined {
+        let value = if n < total {
+            agree(value, defined.get(&name))
+        } else {
+            value
+        };
+        if value != defined.get(&name) {
+            defined.set(&name, value);
+        }
     }
 }
 
-/// `defined` as one branch of a chain sees it on entry: with the chain's
-/// tested symbol (if any) set to its value in the first branch when `first`,
-/// and the opposite otherwise.
-fn with_tested(defined: &Symbols, tested: Option<&(String, bool)>, first: bool) -> Symbols {
-    let mut state = defined.clone();
-    if let Some((name, value_in_first)) = tested {
-        state.insert(name.clone(), *value_in_first == first);
+/// Two paths' values for one symbol joined: the value if they agree, no
+/// evidence otherwise.
+fn agree(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    if a == b {
+        a
+    } else {
+        None
     }
-    state
 }
 
 /// The symbol whose definedness alone decides a `#if FOO` or `#if !FOO`
@@ -212,7 +279,7 @@ fn tested_symbol(node: Node, source: &[u8]) -> Option<(String, bool)> {
 /// directive's line to the next branch's.
 fn chain_branches(node: Node) -> Vec<(Option<Node>, Vec<Node>)> {
     let mut heads = Vec::new();
-    let mut fields = Vec::new();
+    let mut fields = HashSet::new();
     let mut current = Some(node);
     while let Some(n) = current {
         let condition = n.child_by_field_name("condition");
@@ -229,20 +296,23 @@ fn chain_branches(node: Node) -> Vec<(Option<Node>, Vec<Node>)> {
         .filter(|c| !fields.contains(&c.id()))
         .collect();
     content.sort_by_key(|c| c.start_byte());
-    let starts: Vec<usize> = heads.iter().map(|(n, _)| n.start_position().row).collect();
-    heads
+    let mut branches: Vec<(Option<Node>, Vec<Node>)> = heads
         .iter()
-        .enumerate()
-        .map(|(i, (_, condition))| {
-            let next = starts.get(i + 1).copied().unwrap_or(usize::MAX);
-            let body = content
-                .iter()
-                .filter(|c| (starts[i]..next).contains(&c.start_position().row))
-                .copied()
-                .collect();
-            (*condition, body)
-        })
-        .collect()
+        .map(|(_, condition)| (*condition, Vec::new()))
+        .collect();
+    let starts: Vec<usize> = heads.iter().map(|(n, _)| n.start_position().row).collect();
+    // Rows only grow along `content`, so one pass assigns every node.
+    let mut i = 0;
+    for c in content {
+        let row = c.start_position().row;
+        while starts.get(i + 1).is_some_and(|&next| next <= row) {
+            i += 1;
+        }
+        if row >= starts[0] {
+            branches[i].1.push(c);
+        }
+    }
+    branches
 }
 
 fn push_dead_range(body: &[Node], out: &mut Vec<CSharpDeadCodeRegion>) {
@@ -279,7 +349,7 @@ fn eval_condition(node: Node, source: &[u8], defined: &Symbols) -> Option<bool> 
         },
         "identifier" => {
             let name = node.utf8_text(source).ok()?;
-            defined.get(name).copied()
+            defined.get(name)
         }
         "parenthesized_expression" => eval_condition(node.named_child(0)?, source, defined),
         "unary_expression" => {
@@ -581,6 +651,50 @@ mod tests {
             "#endif\n",      // 9
         );
         assert_eq!(ranges(src), vec![(2, 3)]);
+    }
+
+    /// The best of three timings of a scan of `source`.
+    fn best_time(source: &str) -> std::time::Duration {
+        (0..3)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                csharp_dead_code_regions(source.as_bytes());
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+    }
+
+    /// Whether scanning `shape(4 * n)` costs well under 16 times
+    /// `shape(n)`, as a quadratic scan would. Linear is about 4; a ratio
+    /// keeps the test independent of the machine's speed.
+    fn scales_linearly(shape: impl Fn(usize) -> String) -> bool {
+        let small = best_time(&shape(2_500));
+        let large = best_time(&shape(10_000));
+        large < small * 8
+    }
+
+    #[test]
+    fn many_defines_and_chains_scan_in_linear_time() {
+        let shape = |n: usize| {
+            let defines: String = (0..n).map(|i| format!("#define S{i}\n")).collect();
+            let chains: String = (0..n / 2)
+                .map(|i| format!("#if X{i}\nint a{i};\n#endif\n"))
+                .collect();
+            defines + &chains
+        };
+        assert!(scales_linearly(shape));
+    }
+
+    #[test]
+    fn a_long_elif_chain_scans_in_linear_time() {
+        let shape = |n: usize| {
+            let arms: String = (1..n)
+                .map(|i| format!("#elif X{i}\n#define D{i}\nint b{i};\n"))
+                .collect();
+            format!("#if X0\nint a;\n{arms}#endif\n")
+        };
+        assert!(scales_linearly(shape));
     }
 
     #[test]

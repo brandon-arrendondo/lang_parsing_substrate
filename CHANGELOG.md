@@ -5,6 +5,14 @@ releases are recorded only in the git tags and history.
 
 ## Unreleased
 
+### Fixed
+
+- `csharp_dead_code_regions` no longer takes time quadratic in the number
+  of `#elif` branches of a conditional, or in the number of defined
+  symbols times the number of conditionals. A file of 10,000 `#define`s
+  and 5,000 conditionals took seconds; it now takes about as long as
+  parsing it. The regions reported are unchanged.
+
 ## 0.17.0 — 2026-11-03
 
 ### Fixed
