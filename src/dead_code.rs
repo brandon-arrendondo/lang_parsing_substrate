@@ -1229,6 +1229,32 @@ mod tests {
     }
 
     #[test]
+    fn undef_inside_an_undecided_if_leaves_every_later_test_undecided() {
+        // With X true, FOO is undefined after line 4, so both arms of each
+        // later test compile: C spellings, and C++ code under them.
+        for test in [
+            "#ifdef FOO",
+            "#if defined(FOO)",
+            "#ifndef FOO",
+            "#if !defined FOO",
+        ] {
+            for (cond, body) in [("#if X", "f();"), ("#if X > 1", "class A {};")] {
+                let src = format!(
+                    "#define FOO\n{cond}\n#undef FOO\n#endif\n{test}\n{body}\n#else\n{body}\n#endif\n"
+                );
+                assert!(ranges(&src).is_empty(), "{src}");
+            }
+        }
+    }
+
+    #[test]
+    fn undef_two_levels_deep_leaves_the_macro_undecided() {
+        let src = "#define FOO\n#if X\n#ifdef Y\n#undef FOO\n#endif\n#endif\n\
+                   #ifdef FOO\nmaybe();\n#else\nmaybe_too();\n#endif\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
     fn include_guard_defines_hold_inside_the_guard() {
         let src = concat!(
             "#ifndef FOO_H\n", // 1

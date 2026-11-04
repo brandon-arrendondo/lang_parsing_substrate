@@ -21,12 +21,16 @@
 //! (confirmed: `preproc_define` appears as a direct child of
 //! `compilation_unit`, sibling to `using_directive`/`class_declaration`),
 //! so locally-provable symbol definedness ports over: a symbol
-//! unconditionally `#define`d earlier in the file with no later `#undef` is
-//! always-defined, and one `#undef`d with no later `#define` is
-//! never-defined. "Unconditional" means not nested inside *any*
-//! `#if`/`#elif`/`#else` at all. A commented-out `#define` is no evidence,
-//! as in [`crate::dead_code`]: the build can still define the symbol
-//! (`-define:`, `DefineConstants`).
+//! `#define`d on every path to a condition is always-defined there, and one
+//! `#undef`d on every path is never-defined. The evidence follows the paths
+//! through each conditional, as in [`crate::dead_code`]: after `#endif` a
+//! symbol keeps a value only if every branch that may compile, and the path
+//! that skips the conditional when it has no `#else`, agree on it. A branch
+//! of `#if FOO` or `#if !FOO` also knows `FOO` from the test, so `#if !FOO` /
+//! `#define FOO` / `#endif` leaves `FOO` defined on both paths. A dead
+//! branch's `#define` counts on no path. A commented-out `#define` is no
+//! evidence, as in [`crate::dead_code`]: the build can still define the
+//! symbol (`-define:`, `DefineConstants`).
 //!
 //! C# also has no `#ifdef`/`#ifndef` — only `#if`/`#elif` with a boolean
 //! condition expression (`identifier`, `true`/`false` literals, `!`, `&&`,
@@ -66,26 +70,23 @@ pub fn csharp_dead_code_regions(source: &[u8]) -> Vec<CSharpDeadCodeRegion> {
         return Vec::new();
     };
 
-    let mut defined: HashMap<String, bool> = HashMap::new();
+    let mut defined = Symbols::new();
     let mut regions = Vec::new();
-    walk(tree.root_node(), source, 0, &mut defined, &mut regions);
+    walk(tree.root_node(), source, &mut defined, &mut regions);
     regions
 }
 
-/// Recurses through `node`'s named children in document order. `depth` is
-/// the number of enclosing `#if`/`#elif`/`#else` branches (of any kind —
-/// dead, live, or unknown; a dead one is never recursed into at all, so
-/// `depth` only ever grows here for branches we do walk).
-fn walk(
-    node: Node,
-    source: &[u8],
-    depth: usize,
-    defined: &mut HashMap<String, bool>,
-    out: &mut Vec<CSharpDeadCodeRegion>,
-) {
+/// What the file itself proves about each symbol at one point: `true`
+/// defined, `false` undefined. A symbol with no entry has no evidence.
+type Symbols = HashMap<String, bool>;
+
+/// Recurses through `node`'s named children in document order. A dead
+/// branch is never recursed into at all, so a `#define`/`#undef` reached
+/// here is on some path that may compile.
+fn walk(node: Node, source: &[u8], defined: &mut Symbols, out: &mut Vec<CSharpDeadCodeRegion>) {
     let mut cursor = node.walk();
     let children: Vec<Node> = node.named_children(&mut cursor).collect();
-    walk_siblings(&children, source, depth, defined, out);
+    walk_siblings(&children, source, defined, out);
 }
 
 /// Same as [`walk`], but over an arbitrary already-collected slice of
@@ -97,85 +98,149 @@ fn walk(
 fn walk_siblings(
     children: &[Node],
     source: &[u8],
-    depth: usize,
-    defined: &mut HashMap<String, bool>,
+    defined: &mut Symbols,
     out: &mut Vec<CSharpDeadCodeRegion>,
 ) {
     for child in children {
         match child.kind() {
-            "preproc_define" if depth == 0 => {
+            "preproc_define" | "preproc_undef" => {
                 if let Some(name) = preproc_arg_name(*child, source) {
-                    defined.insert(name, true);
+                    defined.insert(name, child.kind() == "preproc_define");
                 }
             }
-            "preproc_undef" if depth == 0 => {
-                if let Some(name) = preproc_arg_name(*child, source) {
-                    defined.insert(name, false);
-                }
-            }
-            "preproc_define" | "preproc_undef" => {}
-            "preproc_if" => walk_chain(*child, source, depth, defined, out),
-            _ => walk(*child, source, depth, defined, out),
+            "preproc_if" => walk_chain(*child, source, defined, out),
+            _ => walk(*child, source, defined, out),
         }
     }
 }
 
 /// Walks one `#if`/`#elif`/`#else` chain, following the `alternative` field
-/// from `#if` through any `#elif`s to a trailing `#else`.
+/// from `#if` through any `#elif`s to a trailing `#else`, and leaves in
+/// `defined` what every path through the chain agrees on.
 fn walk_chain(
     node: Node,
     source: &[u8],
-    depth: usize,
-    defined: &mut HashMap<String, bool>,
+    defined: &mut Symbols,
     out: &mut Vec<CSharpDeadCodeRegion>,
 ) {
+    // The symbol a bare `#if FOO` / `#if !FOO` tests, and its value in the
+    // first branch. Every later branch, and the path that skips the chain,
+    // has the opposite.
+    let tested = node
+        .child_by_field_name("condition")
+        .and_then(|cond| tested_symbol(cond, source));
     // Whether an earlier branch in this chain was proven to always run —
     // if so, every later branch (elif/else) is dead regardless of its own
     // condition.
     let mut chain_resolved_true = false;
-    let mut current = Some(node);
+    let mut has_else = false;
+    // What each branch that may compile leaves behind at `#endif`.
+    let mut paths: Vec<Symbols> = Vec::new();
+    let branches = chain_branches(node);
+    let mut first = true;
 
-    while let Some(n) = current {
-        let condition = n.child_by_field_name("condition");
-        let alternative = n.child_by_field_name("alternative");
-        let body = body_children(n, condition, alternative);
-
-        if chain_resolved_true {
-            push_dead_range(&body, out);
-        } else {
-            match condition {
-                None => {
-                    // #else has no condition of its own.
-                    walk_siblings(&body, source, depth + 1, defined, out);
+    for (condition, body) in branches {
+        has_else |= condition.is_none();
+        // Every condition is evaluated against the chain's entry state: an
+        // earlier branch's writes are not on this branch's path.
+        let live = !chain_resolved_true
+            && match condition.map(|cond| eval_condition(cond, source, defined)) {
+                Some(Some(false)) => false,
+                Some(Some(true)) => {
+                    chain_resolved_true = true;
+                    true
                 }
-                Some(cond) => match eval_condition(cond, source, defined) {
-                    Some(true) => {
-                        chain_resolved_true = true;
-                        walk_siblings(&body, source, depth + 1, defined, out);
-                    }
-                    Some(false) => push_dead_range(&body, out),
-                    None => {
-                        walk_siblings(&body, source, depth + 1, defined, out);
-                    }
-                },
-            }
+                Some(None) | None => true,
+            };
+        if live {
+            let mut state = with_tested(defined, tested.as_ref(), first);
+            walk_siblings(&body, source, &mut state, out);
+            paths.push(state);
+        } else {
+            push_dead_range(&body, out);
         }
+        first = false;
+    }
 
-        current = alternative;
+    // A missing `#else` is an empty branch, taken whenever every condition
+    // is false; no path skips a chain with a proven-true branch.
+    if !has_else && !chain_resolved_true {
+        paths.push(with_tested(defined, tested.as_ref(), false));
+    }
+    if let Some(joined) = paths.into_iter().reduce(|mut acc, path| {
+        acc.retain(|name, value| path.get(name) == Some(value));
+        acc
+    }) {
+        *defined = joined;
     }
 }
 
-/// `node`'s named children other than its `condition`/`alternative`
-/// field values (i.e. its guarded content).
-fn body_children<'a>(
-    node: Node<'a>,
-    condition: Option<Node>,
-    alternative: Option<Node>,
-) -> Vec<Node<'a>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .filter(|c| {
-            Some(c.id()) != condition.map(|n| n.id()) && Some(c.id()) != alternative.map(|n| n.id())
+/// `defined` as one branch of a chain sees it on entry: with the chain's
+/// tested symbol (if any) set to its value in the first branch when `first`,
+/// and the opposite otherwise.
+fn with_tested(defined: &Symbols, tested: Option<&(String, bool)>, first: bool) -> Symbols {
+    let mut state = defined.clone();
+    if let Some((name, value_in_first)) = tested {
+        state.insert(name.clone(), *value_in_first == first);
+    }
+    state
+}
+
+/// The symbol whose definedness alone decides a `#if FOO` or `#if !FOO`
+/// condition (parentheses allowed), and whether the condition is true when
+/// it is defined. `None` for any other condition.
+fn tested_symbol(node: Node, source: &[u8]) -> Option<(String, bool)> {
+    match node.kind() {
+        "identifier" => Some((node.utf8_text(source).ok()?.to_string(), true)),
+        "parenthesized_expression" => tested_symbol(node.named_child(0)?, source),
+        "unary_expression" if node.child_by_field_name("operator")?.kind() == "!" => {
+            let (name, when) = tested_symbol(node.child_by_field_name("argument")?, source)?;
+            Some((name, !when))
+        }
+        _ => None,
+    }
+}
+
+/// Each branch of the chain starting at `node`, in order: its condition
+/// (`None` for `#else`) and its guarded content.
+///
+/// The content is assigned by line, not by tree parent. tree-sitter-c-sharp
+/// parses directives as extras, so a branch's trailing `#define`/`#undef`
+/// can hang off an outer node of the chain (an `#else` holding only
+/// `#undef FOO` comes out empty, with the `#undef` a child of the `#if`
+/// after its `alternative`). A branch owns everything from its own
+/// directive's line to the next branch's.
+fn chain_branches(node: Node) -> Vec<(Option<Node>, Vec<Node>)> {
+    let mut heads = Vec::new();
+    let mut fields = Vec::new();
+    let mut current = Some(node);
+    while let Some(n) = current {
+        let condition = n.child_by_field_name("condition");
+        current = n.child_by_field_name("alternative");
+        fields.extend(condition.iter().chain(current.iter()).map(|f| f.id()));
+        heads.push((n, condition));
+    }
+    let mut content: Vec<Node> = heads
+        .iter()
+        .flat_map(|(n, _)| {
+            let mut cursor = n.walk();
+            n.named_children(&mut cursor).collect::<Vec<_>>()
+        })
+        .filter(|c| !fields.contains(&c.id()))
+        .collect();
+    content.sort_by_key(|c| c.start_byte());
+    let starts: Vec<usize> = heads.iter().map(|(n, _)| n.start_position().row).collect();
+    heads
+        .iter()
+        .enumerate()
+        .map(|(i, (_, condition))| {
+            let next = starts.get(i + 1).copied().unwrap_or(usize::MAX);
+            let body = content
+                .iter()
+                .filter(|c| (starts[i]..next).contains(&c.start_position().row))
+                .copied()
+                .collect();
+            (*condition, body)
         })
         .collect()
 }
@@ -186,15 +251,26 @@ fn push_dead_range(body: &[Node], out: &mut Vec<CSharpDeadCodeRegion>) {
     };
     out.push(CSharpDeadCodeRegion {
         start_line: first.start_position().row + 1,
-        end_line: last.end_position().row + 1,
+        end_line: last_line(*last),
     });
+}
+
+/// The 1-based last line of `node`'s own text. A directive node's range
+/// takes in its line ending, so it ends at column 0 of the next line.
+fn last_line(node: Node) -> usize {
+    let end = node.end_position();
+    if end.column == 0 && end.row > node.start_position().row {
+        end.row
+    } else {
+        end.row + 1
+    }
 }
 
 /// Evaluates a `#if`/`#elif` condition expression node to a constant
 /// boolean, if locally provable — `None` as soon as any operand can't be
 /// resolved (an unrecognized construct, or a symbol with no local
 /// evidence), except where `&&`/`||` short-circuits past it.
-fn eval_condition(node: Node, source: &[u8], defined: &HashMap<String, bool>) -> Option<bool> {
+fn eval_condition(node: Node, source: &[u8], defined: &Symbols) -> Option<bool> {
     match node.kind() {
         "boolean_literal" => match node.utf8_text(source) {
             Ok("true") => Some(true),
@@ -341,6 +417,170 @@ mod tests {
     fn undef_with_no_later_define_makes_if_dead() {
         let src = "#define FOO\n#undef FOO\n#if FOO\nint a = 1;\n#endif\n";
         assert_eq!(ranges(src), vec![(4, 4)]);
+    }
+
+    #[test]
+    fn undef_inside_an_undecided_branch_leaves_the_symbol_undecided() {
+        // With X defined, FOO is undefined at line 5, so the #else compiles.
+        let src = concat!(
+            "#define FOO\n", // 1
+            "#if X\n",       // 2
+            "#undef FOO\n",  // 3
+            "#endif\n",      // 4
+            "#if FOO\n",     // 5
+            "int a = 1;\n",  // 6
+            "#else\n",       // 7
+            "int b = 2;\n",  // 8
+            "#endif\n",      // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn undef_nested_two_branches_deep_leaves_the_symbol_undecided() {
+        let src = concat!(
+            "#define FOO\n", // 1
+            "#if X\n",       // 2
+            "#if Y\n",       // 3
+            "#undef FOO\n",  // 4
+            "#endif\n",      // 5
+            "#endif\n",      // 6
+            "#if !FOO\n",    // 7
+            "int a = 1;\n",  // 8
+            "#endif\n",      // 9
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn a_define_on_every_branch_holds_after_endif() {
+        let src = concat!(
+            "#if X\n",       // 1
+            "#define FOO\n", // 2
+            "#elif Y\n",     // 3
+            "#define FOO\n", // 4
+            "#else\n",       // 5
+            "#define FOO\n", // 6
+            "#endif\n",      // 7
+            "#if FOO\n",     // 8
+            "int a = 1;\n",  // 9
+            "#else\n",       // 10
+            "int b = 2;\n",  // 11
+            "#endif\n",      // 12
+        );
+        assert_eq!(ranges(src), vec![(11, 11)]);
+    }
+
+    #[test]
+    fn a_define_on_some_branches_is_undecided_after_endif() {
+        let src = concat!(
+            "#if X\n",       // 1
+            "#define FOO\n", // 2
+            "#elif Y\n",     // 3
+            "#define FOO\n", // 4
+            "#endif\n",      // 5
+            "#if FOO\n",     // 6
+            "int a = 1;\n",  // 7
+            "#else\n",       // 8
+            "int b = 2;\n",  // 9
+            "#endif\n",      // 10
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn the_default_value_idiom_defines_the_symbol_on_both_paths() {
+        for (test, write) in [("!FOO", "#define FOO"), ("(FOO)", "#undef BAR")] {
+            let src = format!(
+                "#if {test}\n{write}\n#endif\n#if FOO\nint a = 1;\n#else\nint b = 2;\n#endif\n"
+            );
+            let expected = if test == "!FOO" { vec![(7, 7)] } else { vec![] };
+            assert_eq!(ranges(&src), expected, "{test}");
+        }
+    }
+
+    #[test]
+    fn an_undef_in_the_else_of_a_tested_symbol_leaves_it_undefined() {
+        let src = concat!(
+            "#if FOO\n",    // 1
+            "#undef FOO\n", // 2
+            "#else\n",      // 3
+            "#endif\n",     // 4
+            "#if FOO\n",    // 5
+            "int a = 1;\n", // 6
+            "#endif\n",     // 7
+        );
+        assert_eq!(ranges(src), vec![(6, 6)]);
+    }
+
+    #[test]
+    fn a_define_in_a_proven_branch_holds_after_endif() {
+        let src = concat!(
+            "#if true\n",    // 1
+            "#define FOO\n", // 2
+            "#else\n",       // 3
+            "#undef FOO\n",  // 4
+            "#endif\n",      // 5
+            "#if !FOO\n",    // 6
+            "int a = 1;\n",  // 7
+            "#endif\n",      // 8
+        );
+        assert_eq!(ranges(src), vec![(4, 4), (7, 7)]);
+    }
+
+    #[test]
+    fn a_define_in_a_dead_branch_counts_on_no_path() {
+        let src = concat!(
+            "#if false\n",   // 1
+            "#define FOO\n", // 2
+            "#endif\n",      // 3
+            "#if FOO\n",     // 4
+            "int a = 1;\n",  // 5
+            "#else\n",       // 6
+            "int b = 2;\n",  // 7
+            "#endif\n",      // 8
+        );
+        assert_eq!(ranges(src), vec![(2, 2)]);
+    }
+
+    #[test]
+    fn a_later_branch_condition_ignores_an_earlier_branch_define() {
+        let src = concat!(
+            "#if X\n",       // 1
+            "#define FOO\n", // 2
+            "#elif FOO\n",   // 3
+            "int a = 1;\n",  // 4
+            "#endif\n",      // 5
+        );
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn an_else_holding_only_a_directive_is_found_dead() {
+        let src = concat!(
+            "#if true\n",   // 1
+            "int a = 1;\n", // 2
+            "#else\n",      // 3
+            "#undef FOO\n", // 4
+            "#endif\n",     // 5
+        );
+        assert_eq!(ranges(src), vec![(4, 4)]);
+    }
+
+    #[test]
+    fn a_dead_branch_ending_in_a_directive_stops_before_the_next_branch() {
+        let src = concat!(
+            "#if false\n",   // 1
+            "int a = 1;\n",  // 2
+            "#define FOO\n", // 3
+            "#elif BAR\n",   // 4
+            "#define BAZ\n", // 5
+            "#endif\n",      // 6
+            "#if !BAZ\n",    // 7
+            "int b = 2;\n",  // 8
+            "#endif\n",      // 9
+        );
+        assert_eq!(ranges(src), vec![(2, 3)]);
     }
 
     #[test]

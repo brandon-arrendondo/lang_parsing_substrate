@@ -12,6 +12,20 @@ releases are recorded only in the git tags and history.
   the build can still define the symbol with `-define:` or
   `DefineConstants`. This is the rule C and C++ follow since 0.16.0. A
   real `#define` or `#undef` at the top of the file still decides.
+- `csharp_dead_code_regions` no longer ignores a `#define` or `#undef`
+  inside an `#if` branch. After `#define FOO`, `#if X`, `#undef FOO`,
+  `#endif`, it kept FOO defined and marked dead the `#else` of a later
+  `#if FOO`, which compiles when X is defined. The evidence now follows
+  the paths through each conditional, as it has for C and C++ since
+  0.16.0: after `#endif` a symbol keeps a value only if every branch that
+  may compile agrees on it. So a symbol that every branch defines, or
+  that `#if !FOO`, `#define FOO`, `#endif` defines, can now prove a later
+  branch dead.
+- `csharp_dead_code_regions` no longer stretches a dead branch that ends
+  in a `#define` or `#undef` over the branch after it, or over the
+  `#endif` line, and now finds a dead `#else` that holds only a directive.
+  tree-sitter-c-sharp can attach such a directive to the wrong branch, so
+  the scanner now assigns each branch's content by line.
 
 ### Changed
 
@@ -29,7 +43,9 @@ releases are recorded only in the git tags and history.
   reached `#elif 0` arm as dead, with `DeadCodeReason::IfZero`, as they do
   the first arm of `#if 0`. The arms around it keep their own reasons: the
   `#else` of `#ifdef F ... #elif 0 ... #else`, with F defined, is still
-  `AlwaysDefined`. A `#define` inside such an arm does not count.
+  `AlwaysDefined`. A `#define` inside such an arm does not count, so a
+  later `#ifdef` or `#ifndef` of that name can now be proven dead under
+  its own reason.
 
 ## 0.16.0 — 2026-11-03
 
