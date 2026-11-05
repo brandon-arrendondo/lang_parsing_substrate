@@ -34,6 +34,8 @@ mod py;
 pub mod query;
 pub mod regions;
 pub mod registry;
+#[cfg(test)]
+mod scaling_check;
 pub mod suppressions;
 pub mod tsquery;
 

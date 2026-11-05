@@ -653,25 +653,17 @@ mod tests {
         assert_eq!(ranges(src), vec![(2, 3)]);
     }
 
-    /// The best of three timings of a scan of `source`.
-    fn best_time(source: &str) -> std::time::Duration {
-        (0..3)
-            .map(|_| {
-                let start = std::time::Instant::now();
-                csharp_dead_code_regions(source.as_bytes());
-                start.elapsed()
-            })
-            .min()
-            .unwrap()
-    }
-
     /// Whether scanning `shape(4 * n)` costs well under 16 times
-    /// `shape(n)`, as a quadratic scan would. Linear is about 4; a ratio
-    /// keeps the test independent of the machine's speed.
+    /// `shape(n)`, as a quadratic scan would.
     fn scales_linearly(shape: impl Fn(usize) -> String) -> bool {
-        let small = best_time(&shape(2_500));
-        let large = best_time(&shape(10_000));
-        large < small * 8
+        crate::scaling_check::costs_under(
+            &shape(2_500),
+            &shape(10_000),
+            crate::scaling_check::LINEAR_BOUND,
+            |source| {
+                csharp_dead_code_regions(source.as_bytes());
+            },
+        )
     }
 
     #[test]

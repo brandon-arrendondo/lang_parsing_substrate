@@ -1413,9 +1413,26 @@ mod tests {
             src.push_str(&format!("#elif A{i}\n#define X{i}\n"));
         }
         src.push_str("#endif\n#ifdef X4999\nmaybe();\n#endif\n#ifndef X0\nmaybe_too();\n#endif\n");
-        let start = std::time::Instant::now();
         assert!(ranges(&src).is_empty());
-        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_long_elif_chain_of_distinct_defines_scans_in_linear_time() {
+        let shape = |n: usize| {
+            let mut src = String::from("#if A0\n#define X0\n");
+            for i in 1..n {
+                src.push_str(&format!("#elif A{i}\n#define X{i}\n"));
+            }
+            src + "#endif\n#ifdef X0\nmaybe();\n#endif\n"
+        };
+        assert!(crate::scaling_check::costs_under(
+            &shape(1_250),
+            &shape(5_000),
+            crate::scaling_check::LINEAR_BOUND,
+            |source| {
+                dead_code_ranges(source);
+            },
+        ));
     }
 
     #[test]
