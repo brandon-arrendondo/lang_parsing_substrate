@@ -53,10 +53,12 @@
 //!   header offers C++ callers operator overloads or a wrapper class. A
 //!   header whose only C++ is in such arms is C when compiled as C.
 //!
-//! Still read as C++: text in another language that tree-sitter-cpp can
-//! parse, such as JavaScript in an Emscripten `EM_ASM` argument (`new`,
-//! `delete`, `catch`) or Objective-C message sends (`[obj sel:x]` reads as a
-//! lambda).
+//! - A marker inside a brace block passed directly as a call argument, which
+//!   neither C nor C++ allows (a GNU statement expression is parenthesized):
+//!   it is a macro's argument text, such as the JavaScript in Emscripten's
+//!   `EM_ASM({ ... })`, where `new`, `delete` and `catch` are JavaScript.
+//! - A lambda whose capture list does not parse. That is how tree-sitter-cpp
+//!   reads an Objective-C message send, `[obj sel:x]`, in an Apple-only arm.
 //!
 //! The error rule costs some real C++: in `API_EXPORT int& counter();` the
 //! grammar cannot place the unknown macro and leaves an `ERROR` beside the
@@ -107,6 +109,16 @@ fn cpp_only_lines(source: &[u8]) -> Vec<(usize, usize)> {
         .collect()
 }
 
+/// Whether `node` is a lambda whose capture list did not parse: how
+/// tree-sitter-cpp reads an Objective-C message send such as
+/// `[session setActive:true error:nil]`, where `setActive:true` is no capture.
+fn is_message_send(node: Node) -> bool {
+    node.kind() == "lambda_expression"
+        && node
+            .child_by_field_name("captures")
+            .is_some_and(|captures| captures.has_error())
+}
+
 /// Whether `node`'s subtree holds a token that error recovery inserted. For
 /// `MA_API T f(void);`, where `MA_API` is a macro defined elsewhere,
 /// tree-sitter-cpp can read `T f` as the qualified name `T::f` with a
@@ -155,6 +167,12 @@ struct Scan<'a> {
     cursor: TreeCursor<'a>,
     /// From [`cpp_only_lines`]; a marker starting in one counts for nothing.
     cpp_only: Vec<(usize, usize)>,
+    /// Byte range of the outermost brace block seen passed directly as a call
+    /// argument (`EM_ASM({ ... })`). Neither C nor C++ allows one there (a GNU
+    /// statement expression is parenthesized), so it is a macro's argument
+    /// text, often in another language. In pre-order, a node starting inside
+    /// the range lies inside the block.
+    macro_block: (usize, usize),
 }
 
 impl<'a> Scan<'a> {
@@ -167,6 +185,26 @@ impl<'a> Scan<'a> {
             error_end: 0,
             cursor,
             cpp_only,
+            macro_block: (0, 0),
+        }
+    }
+
+    /// Whether `node` starts inside [`Scan::macro_block`].
+    fn in_macro_block(&self, node: Node) -> bool {
+        (self.macro_block.0..self.macro_block.1).contains(&node.start_byte())
+    }
+
+    /// Records a brace block among `arguments`' children, unless it lies in
+    /// the block already recorded.
+    fn note_macro_block(&mut self, arguments: Node<'a>) {
+        if self.in_macro_block(arguments) {
+            return;
+        }
+        if let Some(block) = arguments
+            .children(&mut self.cursor)
+            .find(|child| child.kind() == "compound_statement")
+        {
+            self.macro_block = (block.start_byte(), block.end_byte());
         }
     }
 
@@ -181,6 +219,7 @@ impl<'a> Scan<'a> {
     fn visit(&mut self, node: Node<'a>, source: &[u8]) -> crate::query::Walk {
         match node.kind() {
             "ERROR" => self.error_end = self.error_end.max(node.end_byte()),
+            "argument_list" => self.note_macro_block(node),
             "preproc_def" | "preproc_function_def" | "preproc_ifdef" => {
                 self.macro_name_start = node.child_by_field_name("name").map(|n| n.start_byte());
             }
@@ -193,7 +232,10 @@ impl<'a> Scan<'a> {
             _ => {}
         }
         if is_cpp_only_marker(node) {
-            self.found = !has_missing_token(node) && !self.in_cpp_only_arm(node);
+            self.found = !has_missing_token(node)
+                && !self.in_cpp_only_arm(node)
+                && !self.in_macro_block(node)
+                && !is_message_send(node);
         } else if node.child_count() > 0 && node.start_byte() >= self.error_end && !node.is_error()
         {
             self.judge_children(node);
@@ -225,7 +267,7 @@ impl<'a> Scan<'a> {
         }
         let children: Vec<Node<'a>> = parent.children(&mut self.cursor).collect();
         for child in children {
-            if self.in_cpp_only_arm(child) {
+            if self.in_cpp_only_arm(child) || self.in_macro_block(child) {
                 continue;
             }
             if is_deleted_function(parent, child) {
@@ -615,11 +657,50 @@ public:
     }
 
     #[test]
-    fn foreign_text_still_reads_as_cpp() {
-        // Known gap: Emscripten JavaScript parses as a C++ new-expression.
-        assert!(looks_like_cpp(
-            b"void f(void) { EM_ASM({ var a = new Uint8Array(data); }); }"
-        ));
+    fn javascript_in_a_macro_argument_is_not_cpp() {
+        for src in [
+            "void f(void) { EM_ASM({ var a = new Uint8Array(data); }); }",
+            "void f(void) { EM_ASM({ delete window.miniaudio; }); }",
+            "int f(void) { return EM_ASM_INT({ try { return g(); } catch(e) { return 0; } }); }",
+            "void f(void) { EM_ASM({ var h = function(e) { var r = new FileReader(); }; }, 0); }",
+        ] {
+            assert!(!looks_like_cpp(src.as_bytes()), "{src}");
+        }
+    }
+
+    #[test]
+    fn cpp_in_a_call_argument_is_cpp() {
+        for src in [
+            "void f() { g(new T); }",
+            "void f() { g([](int x) { return x + 1; }); }",
+            "void f() { g([&](int x) { T *p = new T; return x; }); }",
+            "void f() { g(({ int y = 1; y; }), [=] { return 0; }); }",
+            "void f() { g({1, 2}); class Local { int v; }; }",
+        ] {
+            assert!(looks_like_cpp(src.as_bytes()), "{src}");
+        }
+    }
+
+    #[test]
+    fn objective_c_message_send_is_not_cpp() {
+        for src in [
+            "void f(void) { if ([pAudioSession setActive:true error:nil]) { g(); } }",
+            "void f(void) { if (![[AVAudioSession sharedInstance] setActive:false error:nil]) { g(); } }",
+            "void f(void) { if (a) { g(); } else if ([session setCategory: AVAudioSessionCategoryPlayback withOptions:options error:nil]) { h(); } }",
+        ] {
+            assert!(!looks_like_cpp(src.as_bytes()), "{src}");
+        }
+    }
+
+    #[test]
+    fn lambdas_are_cpp() {
+        for src in [
+            "auto add = [](int a, int b) { return a + b; };",
+            "void f() { int n = 0; auto inc = [&n]() { ++n; }; }",
+            "void f() { auto g = [this, x = 2]() mutable { return x; }; }",
+        ] {
+            assert!(looks_like_cpp(src.as_bytes()), "{src}");
+        }
     }
 
     #[test]
