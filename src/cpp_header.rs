@@ -40,6 +40,24 @@
 //! error rule, unless it is a bare `a & b;`: a reference declared with no
 //! initializer and without `extern`, which C++ rejects.
 //!
+//! Two more things count for nothing, whatever the marker:
+//!
+//! - A marker whose subtree holds a `MISSING` token. Error recovery inserts
+//!   tokens, and for `MA_API T f(void);` with `MA_API` defined elsewhere it
+//!   can build the qualified name `T::f` around a `MISSING` `::`. Whether it
+//!   does depends on the code around the declaration, so one such header
+//!   reads as C++ and a reduction of it does not.
+//! - A marker inside an arm only a C++ compiler reads: `#ifdef __cplusplus`,
+//!   `#if defined(__cplusplus) [&& ...]`, and the `#else` of
+//!   `#ifndef __cplusplus` / `#if !defined(__cplusplus)`. That is how a C
+//!   header offers C++ callers operator overloads or a wrapper class. A
+//!   header whose only C++ is in such arms is C when compiled as C.
+//!
+//! Still read as C++: text in another language that tree-sitter-cpp can
+//! parse, such as JavaScript in an Emscripten `EM_ASM` argument (`new`,
+//! `delete`, `catch`) or Objective-C message sends (`[obj sel:x]` reads as a
+//! lambda).
+//!
 //! The error rule costs some real C++: in `API_EXPORT int& counter();` the
 //! grammar cannot place the unknown macro and leaves an `ERROR` beside the
 //! reference, so a header whose only marker is that shape reads as C.
@@ -70,9 +88,46 @@ pub fn looks_like_cpp(source: &[u8]) -> bool {
         return false;
     };
 
-    let mut scan = Scan::new(tree.walk());
+    let mut scan = Scan::new(tree.walk(), cpp_only_lines(source));
     crate::query::walk_preorder(tree.root_node(), |node| scan.visit(node, source));
     scan.verdict()
+}
+
+/// The 1-based inclusive line ranges of the arms only a C++ compiler reads:
+/// `#ifdef __cplusplus`, `#if defined(__cplusplus) [&& ...]`, and the `#else`
+/// of `#ifndef __cplusplus` / `#if !defined(__cplusplus)`. C++ there is how a
+/// C header serves C++ callers, so it is no evidence about the header itself.
+/// The scan is the line-based one in [`crate::dead_code`], which the
+/// unbalanced brace of an `extern "C"` guard cannot mis-nest.
+fn cpp_only_lines(source: &[u8]) -> Vec<(usize, usize)> {
+    crate::dead_code::dead_code_ranges(&String::from_utf8_lossy(source))
+        .into_iter()
+        .filter(|region| region.reason == crate::dead_code::DeadCodeReason::CppOnly)
+        .map(|region| (region.start_line, region.end_line))
+        .collect()
+}
+
+/// Whether `node`'s subtree holds a token that error recovery inserted. For
+/// `MA_API T f(void);`, where `MA_API` is a macro defined elsewhere,
+/// tree-sitter-cpp can read `T f` as the qualified name `T::f` with a
+/// `MISSING` `::`; the C++ syntax there is the parser's, not the file's.
+/// Only subtrees that hold an error are entered.
+fn has_missing_token(node: Node) -> bool {
+    if !node.has_error() {
+        return false;
+    }
+    let mut found = false;
+    crate::query::walk_preorder(node, |n| {
+        if n.is_missing() {
+            found = true;
+            crate::query::Walk::Stop
+        } else if n.has_error() {
+            crate::query::Walk::Continue
+        } else {
+            crate::query::Walk::SkipChildren
+        }
+    });
+    found
 }
 
 /// State for the single walk in [`looks_like_cpp`].
@@ -98,10 +153,12 @@ struct Scan<'a> {
     error_end: usize,
     /// Reused for every node's children, rather than a new cursor per node.
     cursor: TreeCursor<'a>,
+    /// From [`cpp_only_lines`]; a marker starting in one counts for nothing.
+    cpp_only: Vec<(usize, usize)>,
 }
 
 impl<'a> Scan<'a> {
-    fn new(cursor: TreeCursor<'a>) -> Self {
+    fn new(cursor: TreeCursor<'a>, cpp_only: Vec<(usize, usize)>) -> Self {
         Self {
             found: false,
             new_or_delete: false,
@@ -109,7 +166,16 @@ impl<'a> Scan<'a> {
             macro_name_start: None,
             error_end: 0,
             cursor,
+            cpp_only,
         }
+    }
+
+    /// Whether `node` starts in an arm only a C++ compiler reads.
+    fn in_cpp_only_arm(&self, node: Node) -> bool {
+        let line = node.start_position().row + 1;
+        self.cpp_only
+            .iter()
+            .any(|&(start, end)| (start..=end).contains(&line))
     }
 
     fn visit(&mut self, node: Node<'a>, source: &[u8]) -> crate::query::Walk {
@@ -127,7 +193,7 @@ impl<'a> Scan<'a> {
             _ => {}
         }
         if is_cpp_only_marker(node) {
-            self.found = true;
+            self.found = !has_missing_token(node) && !self.in_cpp_only_arm(node);
         } else if node.child_count() > 0 && node.start_byte() >= self.error_end && !node.is_error()
         {
             self.judge_children(node);
@@ -157,7 +223,11 @@ impl<'a> Scan<'a> {
         if !candidate {
             return;
         }
-        for child in parent.children(&mut self.cursor) {
+        let children: Vec<Node<'a>> = parent.children(&mut self.cursor).collect();
+        for child in children {
+            if self.in_cpp_only_arm(child) {
+                continue;
+            }
             if is_deleted_function(parent, child) {
                 self.found = true;
                 return;
@@ -447,6 +517,109 @@ private:
     #[test]
     fn class_inside_extern_c_guard_is_cpp() {
         assert!(looks_like_cpp(&guarded("class Widget { int v; };")));
+    }
+
+    /// An include guard, the `extern "C"` guard, a typedef'd struct and one
+    /// declaration behind an export macro defined elsewhere. tree-sitter-cpp
+    /// reads `ma_log_callback ma_log_callback_init` as a qualified name with a
+    /// `MISSING` `::` here. The recovery is that sensitive: shorter names or
+    /// the declaration alone parse without it.
+    const EXPORT_MACRO_HEADER: &[u8] = b"#ifndef X_H
+#define X_H
+#ifdef __cplusplus
+extern \"C\" {
+#endif
+typedef unsigned int ma_uint32;
+typedef struct
+{
+    void* pUserData;
+} ma_log_callback;
+
+MA_API ma_log_callback ma_log_callback_init(void* pUserData);
+#ifdef __cplusplus
+}
+#endif
+#endif
+";
+
+    #[test]
+    fn inserted_scope_operator_is_not_cpp() {
+        let tree = {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                .unwrap();
+            parser.parse(EXPORT_MACRO_HEADER, None).unwrap()
+        };
+        // Guards the fixture: the grammar must still build the false marker.
+        let mut inserted = false;
+        crate::query::walk_preorder(tree.root_node(), |n| {
+            inserted |= n.kind() == "qualified_identifier" && has_missing_token(n);
+            crate::query::Walk::Continue
+        });
+        assert!(inserted, "fixture no longer yields a MISSING `::`");
+        assert!(!looks_like_cpp(EXPORT_MACRO_HEADER));
+    }
+
+    #[test]
+    fn written_scope_operator_beside_an_export_macro_is_cpp() {
+        let mut src = EXPORT_MACRO_HEADER.to_vec();
+        src.extend_from_slice(b"int Widget::value() const { return 0; }\n");
+        assert!(looks_like_cpp(&src));
+    }
+
+    #[test]
+    fn cpp_only_arms_of_a_c_header_are_not_cpp() {
+        for src in [
+            // operator overloads for C++ callers
+            "typedef struct { float x, y; } Vec2;\n#if defined(__cplusplus) && !defined(NO_CPP_OPERATORS)\ninline Vec2 operator+(Vec2 a, Vec2 b) { return a; }\ninline Vec2& operator+=(Vec2& a, Vec2 b) { return a; }\n#endif\n",
+            "#ifdef __cplusplus\n# include <cstring>\nusing namespace std;\n#else\n# include <string.h>\n#endif\n",
+            "#ifndef __cplusplus\nint f(void);\n#else\nnamespace m { class Model { public: Model(); ~Model(); }; }\n#endif\n",
+            "#if !defined(__cplusplus)\nint f(void);\n#else\ntemplate<typename T> T id(T t) { return t; }\n#endif\n",
+            "#ifdef __cplusplus\nvoid f(T& x);\nvoid g(T *p) { delete p; }\n#endif\n",
+        ] {
+            assert!(!looks_like_cpp(src.as_bytes()), "{src}");
+        }
+    }
+
+    #[test]
+    fn cpp_outside_a_cpp_only_arm_is_cpp() {
+        for src in [
+            "#ifndef __cplusplus\nnamespace m { int f(); }\n#endif\n",
+            "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint f(void);\n#ifdef __cplusplus\n}\n#endif\nclass Widget { int v; };\n",
+            "#ifdef __cplusplus\nusing namespace std;\n#endif\nvoid f(T& x);\n",
+            "#if defined(__cplusplus) || defined(WANT_CPP)\nusing namespace std;\n#endif\n",
+        ] {
+            assert!(looks_like_cpp(src.as_bytes()), "{src}");
+        }
+    }
+
+    #[test]
+    fn cpp_header_with_an_unknown_class_macro_is_cpp() {
+        // A Qt header: `Q_OBJECT` is a macro tree-sitter-cpp cannot place.
+        let src = b"#ifndef SIGNALBAR_H
+#define SIGNALBAR_H
+#include <QObject>
+class SignalBar : public QStyledItemDelegate
+{
+\tQ_OBJECT
+
+public:
+\tSignalBar(QObject *parent = 0);
+\t~SignalBar();
+\tvirtual void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const;
+};
+#endif
+";
+        assert!(looks_like_cpp(src));
+    }
+
+    #[test]
+    fn foreign_text_still_reads_as_cpp() {
+        // Known gap: Emscripten JavaScript parses as a C++ new-expression.
+        assert!(looks_like_cpp(
+            b"void f(void) { EM_ASM({ var a = new Uint8Array(data); }); }"
+        ));
     }
 
     #[test]
