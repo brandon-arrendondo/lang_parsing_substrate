@@ -64,6 +64,12 @@
 //! grammar cannot place the unknown macro and leaves an `ERROR` beside the
 //! reference, so a header whose only marker is that shape reads as C.
 //!
+//! [`sniff_header`] runs that parse within a [`ParseBudget`]: tree-sitter's
+//! error recovery is quadratic on some malformed inputs, and a header that
+//! reaches the budget is [`HeaderSniff::Undecided`], an answer the caller can
+//! report, rather than a guess either way. [`looks_like_cpp`] is the same
+//! check unbounded.
+//!
 //! Parses `source` with the C++ grammar internally, rather than taking an
 //! already-parsed `Tree` like [`crate::detect_min_c_standard`] does —
 //! there's no way to know which grammar to parse a `.h` file with *before*
@@ -74,25 +80,62 @@
 
 use tree_sitter::{Node, Parser, TreeCursor};
 
+use crate::parse_budget::{parse_within_budget, BudgetExceeded, ParseBudget};
+
 /// Returns `true` if `source`'s syntax contains a construct with no meaning
 /// in C — i.e. the file can only be C++. See the module documentation for
 /// what is and isn't treated as a marker, and why `false` doesn't mean
 /// "confirmed C".
+///
+/// The parse is **unbounded**: on a malformed input whose error recovery is
+/// quadratic it can run for minutes. Prefer [`sniff_header`], which stops at
+/// a [`ParseBudget`] and says so.
 pub fn looks_like_cpp(source: &[u8]) -> bool {
+    sniff_header_with_budget(source, ParseBudget::UNLIMITED) == HeaderSniff::Cpp
+}
+
+/// What [`sniff_header`] found in a `.h` file's content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderSniff {
+    /// Consistent with C: no construct that only C++ has. Not "confirmed C";
+    /// see the module documentation.
+    C,
+    /// A construct with no meaning in C, so the file can only be C++.
+    Cpp,
+    /// The C++ parse reached its budget, so the content was not read. A
+    /// caller should report the file as refused rather than pick an answer.
+    Undecided(BudgetExceeded),
+}
+
+/// [`looks_like_cpp`]'s answer within [`ParseBudget::default`]: `C` or `Cpp`
+/// as that function would say, or `Undecided` when the parse is stopped.
+pub fn sniff_header(source: &[u8]) -> HeaderSniff {
+    sniff_header_with_budget(source, ParseBudget::default())
+}
+
+/// [`sniff_header`] with a caller's budget. [`ParseBudget::UNLIMITED`] never
+/// answers `Undecided`.
+pub fn sniff_header_with_budget(source: &[u8], budget: ParseBudget) -> HeaderSniff {
     let mut parser = Parser::new();
     if parser
         .set_language(&tree_sitter_cpp::LANGUAGE.into())
         .is_err()
     {
-        return false;
+        return HeaderSniff::C;
     }
-    let Some(tree) = parser.parse(source, None) else {
-        return false;
+    let tree = match parse_within_budget(&mut parser, source, budget) {
+        Ok(Some(tree)) => tree,
+        Ok(None) => return HeaderSniff::C,
+        Err(exceeded) => return HeaderSniff::Undecided(exceeded),
     };
 
     let mut scan = Scan::new(tree.walk(), cpp_only_lines(source));
     crate::query::walk_preorder(tree.root_node(), |node| scan.visit(node, source));
-    scan.verdict()
+    if scan.verdict() {
+        HeaderSniff::Cpp
+    } else {
+        HeaderSniff::C
+    }
 }
 
 /// The 1-based inclusive line ranges of the arms only a C++ compiler reads:
@@ -701,6 +744,80 @@ public:
         ] {
             assert!(looks_like_cpp(src.as_bytes()), "{src}");
         }
+    }
+
+    /// `/* x...` then `lines` lines of ` */`: tree-sitter's error recovery on
+    /// it is quadratic in `lines`.
+    fn unclosed_comment_header(lines: usize) -> Vec<u8> {
+        let mut src = format!("/* {}\n", "x".repeat(40)).into_bytes();
+        for _ in 0..lines {
+            src.extend_from_slice(b" */\n");
+        }
+        src
+    }
+
+    #[test]
+    fn quadratic_recovery_is_undecided_not_guessed() {
+        // Unbounded, this sniff takes about 8 s; within the default budget it
+        // stops in well under a second and says it could not decide.
+        let src = unclosed_comment_header(4_000);
+        let start = std::time::Instant::now();
+        match sniff_header(&src) {
+            HeaderSniff::Undecided(exceeded) => {
+                assert_eq!(exceeded.source_len, src.len());
+                assert_eq!(
+                    exceeded.budget_steps,
+                    ParseBudget::DEFAULT.steps_for(src.len())
+                );
+            }
+            other => panic!("expected Undecided, got {other:?}"),
+        }
+        assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_small_malformed_header_still_decides() {
+        assert_eq!(sniff_header(&unclosed_comment_header(50)), HeaderSniff::C);
+    }
+
+    #[test]
+    fn unlimited_budget_keeps_the_unbounded_answer() {
+        let src = unclosed_comment_header(300);
+        assert_eq!(
+            sniff_header_with_budget(&src, ParseBudget::UNLIMITED),
+            HeaderSniff::C
+        );
+        assert!(!looks_like_cpp(&src));
+    }
+
+    #[test]
+    fn sniff_header_agrees_with_looks_like_cpp() {
+        for src in [
+            EXPORT_MACRO_HEADER.to_vec(),
+            b"namespace app { int helper(); }".to_vec(),
+            guarded(POINTER_NAMED_NEW),
+            b"void f(double) = delete;".to_vec(),
+        ] {
+            let expected = if looks_like_cpp(&src) {
+                HeaderSniff::Cpp
+            } else {
+                HeaderSniff::C
+            };
+            assert_eq!(sniff_header(&src), expected);
+        }
+    }
+
+    #[test]
+    fn a_large_ordinary_header_decides_within_the_default() {
+        // 5,000 declarations, about 200 KB of clean declarations: linear to
+        // parse, and well inside the budget's per-byte allowance.
+        let mut src = guarded("").to_vec();
+        for i in 0..5_000 {
+            src.extend_from_slice(format!("int function_{i}(int a, const char *b);\n").as_bytes());
+        }
+        assert_eq!(sniff_header(&src), HeaderSniff::C);
+        src.extend_from_slice(b"class Widget { int v; };\n");
+        assert_eq!(sniff_header(&src), HeaderSniff::Cpp);
     }
 
     #[test]

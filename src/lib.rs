@@ -28,6 +28,7 @@ pub mod imports;
 pub mod isr;
 #[cfg(feature = "lang-markdown")]
 pub mod markdown;
+pub mod parse_budget;
 pub mod path_ignore;
 #[cfg(feature = "pyo3")]
 mod py;
@@ -47,7 +48,7 @@ pub use classify::{
     DEFAULT_PREFIX_LEN,
 };
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
-pub use cpp_header::looks_like_cpp;
+pub use cpp_header::{looks_like_cpp, sniff_header, sniff_header_with_budget, HeaderSniff};
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-csharp"))]
 pub use dead_code::{
     dead_code_ranges, dead_code_ranges_with_assumptions, posix_default_assumptions, DeadCodeReason,
@@ -67,6 +68,7 @@ pub use imports::{distinct_import_count, import_sources};
 pub use isr::{interrupt_handlers, InterruptEvidence, InterruptHandler};
 #[cfg(feature = "lang-markdown")]
 pub use markdown::{front_matter, sections, ContentMap, FrontMatter, FrontMatterKind, Section};
+pub use parse_budget::{parse_within_budget, BudgetExceeded, ParseBudget};
 pub use path_ignore::PathIgnore;
 pub use query::{
     ancestors, child_nodes, find_ancestor, find_ancestor_from_root, find_descendants,

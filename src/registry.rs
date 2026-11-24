@@ -420,13 +420,18 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 /// to parse it anyway). Identical to [`language_for_file`] for every
 /// extension except `.h`: a `.h` file is ambiguous between C and C++, and
 /// this checks `source` for an unambiguous C++-only construct
-/// ([`crate::looks_like_cpp`]) before falling back to `language_for_file`'s
+/// ([`crate::sniff_header`]) before falling back to `language_for_file`'s
 /// default of C. See that function's module docs for what counts as
 /// unambiguous and why a "no" doesn't mean "confirmed C".
+///
+/// The check runs within [`crate::ParseBudget::default`]. A header whose
+/// parse reaches it is undecided, and gets the default of C here, since this
+/// function overrides the extension only on evidence. A caller that must
+/// report such a file calls [`crate::sniff_header`] itself.
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub fn language_for_header_content(path: &Path, source: &[u8]) -> Option<Language> {
     match path_extension(path).as_deref() {
-        Some("h") if crate::cpp_header::looks_like_cpp(source) => {
+        Some("h") if crate::cpp_header::sniff_header(source) == crate::HeaderSniff::Cpp => {
             Some(tree_sitter_cpp::LANGUAGE.into())
         }
         _ => language_for_file(path),
