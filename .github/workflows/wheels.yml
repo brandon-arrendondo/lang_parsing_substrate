@@ -47,8 +47,9 @@ jobs:
           - { id: musl-aarch64,  runner: ubuntu-22.04, target: aarch64-unknown-linux-musl, manylinux: musllinux_1_2 }
           # Both macOS arches build on the Apple-Silicon runner; x86_64 is
           # cross-compiled. Avoids the deprecated/scarce macos-13 Intel runners.
-          - { id: macos-x86_64,  runner: macos-14, target: x86_64-apple-darwin }
-          - { id: macos-aarch64, runner: macos-14, target: aarch64 }
+          # macos-14 was retired: GitHub refuses the job before it starts.
+          - { id: macos-x86_64,  runner: macos-15, target: x86_64-apple-darwin }
+          - { id: macos-aarch64, runner: macos-15, target: aarch64 }
           - { id: windows-x64,   runner: windows-2022, target: x64 }
     steps:
       - uses: actions/checkout@v4
