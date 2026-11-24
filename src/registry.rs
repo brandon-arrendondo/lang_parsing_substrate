@@ -427,7 +427,9 @@ pub fn language_for_file(path: &Path) -> Option<Language> {
 /// The check runs within [`crate::ParseBudget::default`]. A header whose
 /// parse reaches it is undecided, and gets the default of C here, since this
 /// function overrides the extension only on evidence. A caller that must
-/// report such a file calls [`crate::sniff_header`] itself.
+/// report such a file calls [`crate::sniff_header`] itself. Parsing such a
+/// header with the C grammar is just as slow as the sniff would have been,
+/// so parse it with [`crate::parse_within_budget`] too.
 #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
 pub fn language_for_header_content(path: &Path, source: &[u8]) -> Option<Language> {
     match path_extension(path).as_deref() {

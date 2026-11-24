@@ -96,6 +96,7 @@ pub fn looks_like_cpp(source: &[u8]) -> bool {
 
 /// What [`sniff_header`] found in a `.h` file's content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaderSniff {
     /// Consistent with C: no construct that only C++ has. Not "confirmed C";
     /// see the module documentation.

@@ -8,7 +8,8 @@
 //! quietly guess.
 //!
 //! The budget counts **steps**: one step is one call of tree-sitter's
-//! progress callback, which the parser makes every 100 internal operations.
+//! progress callback, which the parser makes after every 100 or more
+//! internal operations.
 //! A step count is a property of the input and the grammar, not of the
 //! machine, so a parse that exceeds its budget exceeds it everywhere, and a
 //! refusal can be reproduced. It is not stable across tree-sitter or grammar
@@ -53,8 +54,9 @@ impl ParseBudget {
 
     /// The steps allowed for an input of `len` bytes.
     pub fn steps_for(&self, len: usize) -> u64 {
-        let per_byte = self.steps_per_kib.saturating_mul(len as u64) / 1024;
-        self.base_steps.saturating_add(per_byte)
+        let per_byte = u128::from(self.steps_per_kib) * len as u128 / 1024;
+        self.base_steps
+            .saturating_add(u64::try_from(per_byte).unwrap_or(u64::MAX))
     }
 }
 
@@ -67,6 +69,7 @@ impl Default for ParseBudget {
 /// A parse that [`parse_within_budget`] stopped because it reached its
 /// budget. Carries what a caller needs to report the refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BudgetExceeded {
     /// The steps the budget allowed for this input.
     pub budget_steps: u64,
@@ -91,13 +94,22 @@ impl std::error::Error for BudgetExceeded {}
 /// Parses `source` with `parser`'s language, stopping once the parse has
 /// taken more than `budget` allows for an input of this length.
 ///
-/// `Ok(None)` is [`Parser::parse`]'s own `None`: the parser has no language
-/// set. A parse stopped by the budget is `Err`, never a partial tree.
+/// A parse stopped by the budget is `Err`, never a partial tree. `Ok(None)`
+/// is tree-sitter's own `None`, given without the budget being reached: the
+/// parser has no language set, or a stop the caller configured on `parser`
+/// itself (the deprecated `set_timeout_micros` or cancellation flag) ended
+/// the parse first. `parser.language()` tells the two apart.
+///
+/// The parse always starts afresh, and `parser` is reset after a stopped
+/// parse, so its next parse does not resume this one.
 pub fn parse_within_budget(
     parser: &mut Parser,
     source: &[u8],
     budget: ParseBudget,
 ) -> Result<Option<Tree>, BudgetExceeded> {
+    // A parse that was stopped and never reset is resumed by the next call,
+    // even on different input; whoever stopped it, start from nothing.
+    parser.reset();
     let budget_steps = budget.steps_for(source.len());
     let mut steps = 0u64;
     let mut stopped_at = None;
@@ -115,6 +127,11 @@ pub fn parse_within_budget(
         None,
         Some(options),
     );
+    if tree.is_none() {
+        // tree-sitter returns NULL from a stopped parse without resetting
+        // the parser, so the caller's next parse would resume this one.
+        parser.reset();
+    }
     match stopped_at {
         Some(byte_offset) => Err(BudgetExceeded {
             budget_steps,
@@ -187,6 +204,25 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_leaves_the_parser_fresh_for_the_next_input() {
+        let mut parser = c_parser();
+        let bad = unclosed_comment_header(1_000);
+        assert!(parse_within_budget(&mut parser, &bad, ParseBudget::default()).is_err());
+        let src = b"int x;\n";
+        let tree = parse_within_budget(&mut parser, src, ParseBudget::default())
+            .unwrap()
+            .unwrap();
+        assert!(!tree.root_node().has_error());
+        assert_eq!(tree.root_node().end_byte(), src.len());
+        // The plain API on the same parser must not resume the stopped parse
+        // either.
+        assert!(parse_within_budget(&mut parser, &bad, ParseBudget::default()).is_err());
+        let tree = parser.parse(src, None).unwrap();
+        assert!(!tree.root_node().has_error());
+        assert_eq!(tree.root_node().end_byte(), src.len());
+    }
+
+    #[test]
     fn a_parser_without_a_language_is_ok_none() {
         assert!(matches!(
             parse_within_budget(&mut Parser::new(), b"int x;", ParseBudget::default()),
@@ -201,6 +237,13 @@ mod tests {
             steps_per_kib: u64::MAX,
         };
         assert_eq!(huge.steps_for(usize::MAX), u64::MAX);
+        let per_kib_only = ParseBudget {
+            base_steps: 0,
+            steps_per_kib: u64::MAX,
+        };
+        assert_eq!(per_kib_only.steps_for(1 << 20), u64::MAX);
+        assert_eq!(per_kib_only.steps_for(1024), u64::MAX);
+        assert_eq!(per_kib_only.steps_for(512), u64::MAX / 2);
         assert_eq!(ParseBudget::DEFAULT.steps_for(0), 2_000);
         assert_eq!(ParseBudget::DEFAULT.steps_for(4096), 3_024);
     }

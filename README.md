@@ -12,7 +12,8 @@ reStructuredText — compiled in at build time via Cargo feature flags.
 | Module | Provides |
 |--------|----------|
 | `registry` | Language detection by file name and extension, the `LanguageInfo` table, SLOC comment-style metadata |
-| `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`looks_like_cpp`; the registry's `language_for_header_content` uses it) |
+| `cpp_header` | Best-effort C-vs-C++ disambiguation for `.h` files from their content (`sniff_header`, which answers C, C++ or undecided within a parse budget, and the unbounded `looks_like_cpp`; the registry's `language_for_header_content` uses `sniff_header`) |
+| `parse_budget` | Parsing with a deterministic work budget (`parse_within_budget`), so a malformed input whose error recovery is quadratic is refused with a `BudgetExceeded` instead of running for minutes |
 | `classify` | Cheap **heuristic** pre-parse file classification from a bounded byte prefix + size: `SourceText` / `Binary` / `Oversize` / `Empty`, so consumers can skip a 2 GB zip named `.c` before it reaches tree-sitter |
 | `query` | Iterative tree-sitter traversal: `walk_preorder` (one cursor per walk), `find_descendants`, `find_first_descendant`, root-down ancestor lookups (`ancestors`, `find_ancestor_from_root`), linear `child_nodes`, `node_text` |
 | `flat` | A whole parse tree as flat, index-linked columns (`flatten` → `FlatTree`), so a consumer that cannot hold a `tree_sitter::Node` (Python) can still walk every node |
@@ -196,7 +197,8 @@ if let Some(standard) = detect_min_c_standard(&tree, source.as_bytes()) {
 - `language_for_key(key: &str) -> Option<Language>` — grammar dispatch by registry key (plus the grammar-only keys `tsx` and `markdown_inline`)
 - `language_info_for_file(path: &Path) -> Option<&'static LanguageInfo>`
 - `sloc_mode_for_file(path: &Path) -> Option<SlocMode>` — comment style for SLOC counting
-- `language_for_header_content(path, source)` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`registry` and `cpp_header`; needs `lang-c` and `lang-cpp`)
+- `language_for_header_content(path, source)` / `sniff_header` / `sniff_header_with_budget` / `HeaderSniff` / `looks_like_cpp` — `.h` C-vs-C++ disambiguation (`registry` and `cpp_header`; needs `lang-c` and `lang-cpp`)
+- `parse_within_budget` / `ParseBudget` / `BudgetExceeded` — a parse stopped, and reported, once it exceeds a work budget (`parse_budget`)
 - `classify` / `classify_file` / `FileClass` / `BinaryKind` / `TextEncoding` / `SourceText` / `ClassifyLimits` — heuristic pre-parse file classification (`classify`)
 - `is_discoverable_file(path: &Path) -> bool` — recursive-discovery gate by file name or extension
 - `is_source_extension` / `is_parseable_extension(ext: &OsStr) -> bool` — recursive-discovery gates by extension
