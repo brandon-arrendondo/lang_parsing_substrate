@@ -3,6 +3,13 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## 0.17.2 — 2026-11-23
+
+No change to the crate's code. It republishes 0.17.1 so that its Python
+wheels reach PyPI: the macOS wheel jobs ran on a runner image GitHub has
+retired, so 0.17.1 was published to crates.io only. Its notes below are
+what 0.17.2 brings to a PyPI user coming from 0.17.0.
+
 ## 0.17.1 — 2026-11-23
 
 ### Fixed
