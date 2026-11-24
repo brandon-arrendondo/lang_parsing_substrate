@@ -3,9 +3,28 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
-## Unreleased
+## 0.17.1 — 2026-11-23
 
 ### Fixed
+
+- `looks_like_cpp` no longer calls a C header C++ because of syntax that
+  tree-sitter-cpp's error recovery built, or that a C compiler never reads:
+  - a C++ marker whose subtree holds a token error recovery inserted, such
+    as the `::` it invents in `MA_API T f(void);` when the export macro is
+    defined in another header;
+  - a marker inside an arm only a C++ compiler reads (`#ifdef __cplusplus`,
+    `#if defined(__cplusplus) [&& ...]`, the `#else` of
+    `#ifndef __cplusplus`), where C headers offer C++ callers operator
+    overloads or a wrapper class;
+  - a marker inside a brace block passed directly as a call argument, which
+    neither C nor C++ allows, so it is macro argument text such as the
+    JavaScript in Emscripten's `EM_ASM({ ... })`;
+  - a lambda whose capture list does not parse, which is how an Objective-C
+    message send `[obj sel:x]` reads.
+
+  Across every `.h` in twelve real C codebases (2225 headers), 116 move
+  from C++ to C and none from C to C++. A consumer that skips C++ headers
+  now reads them. The sniff takes about 10% longer over those headers.
 
 - `csharp_dead_code_regions` no longer takes time quadratic in the number
   of `#elif` branches of a conditional, or in the number of defined
