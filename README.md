@@ -99,17 +99,17 @@ for a language it does not model.
 A consumer that only cares about C/C++, for example, would declare:
 
 ```toml
-lang-parsing-substrate = { version = "0.17.2", default-features = false, features = ["lang-c", "lang-cpp"] }
+lang-parsing-substrate = { version = "0.17.3", default-features = false, features = ["lang-c", "lang-cpp"] }
 ```
 
 ## Usage
 
 ```toml
 # Cargo.toml — full language set (default)
-lang-parsing-substrate = "0.17.2"
+lang-parsing-substrate = "0.17.3"
 
 # Cargo.toml — C/C++ only
-lang-parsing-substrate = { version = "0.17.2", default-features = false, features = ["lang-c", "lang-cpp"] }
+lang-parsing-substrate = { version = "0.17.3", default-features = false, features = ["lang-c", "lang-cpp"] }
 ```
 
 ```rust

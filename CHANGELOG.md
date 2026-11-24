@@ -3,6 +3,31 @@
 Notable changes to this crate, for people who use it, from 0.10.0 on. Earlier
 releases are recorded only in the git tags and history.
 
+## 0.17.3 — 2026-11-24
+
+### Added
+
+- `parse_within_budget` parses with a step budget (`ParseBudget`) and
+  returns `BudgetExceeded` when the parse runs past it, never a partial
+  tree. A step is one call of tree-sitter's progress callback, so a budget
+  gives the same answer for the same input and grammar on every machine.
+  The default allows 2,000 steps plus 256 per KiB, more than ten times what
+  any file of twelve real C codebases needs. The parser is reset after a
+  stopped parse, so its next parse starts afresh.
+- `sniff_header` and `sniff_header_with_budget` decide whether a header is
+  C or C++ within a budget, and answer `HeaderSniff::Undecided` with the
+  `BudgetExceeded` details when the parse runs past it, for the caller to
+  report. Some malformed inputs make tree-sitter's error recovery take time
+  quadratic in their length: an unclosed comment followed by thousands of
+  ` */` lines took over two minutes at 104 KB, and is now refused in about
+  a second.
+
+### Changed
+
+- `language_for_header_content` uses the budgeted sniff, and gives a header
+  the C grammar when the sniff is undecided, as it already did without
+  evidence of C++. `looks_like_cpp` is unchanged and still unbounded.
+
 ## 0.17.2 — 2026-11-23
 
 No change to the crate's code. It republishes 0.17.1 so that its Python
